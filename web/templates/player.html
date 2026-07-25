@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Player · Media Share</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="player-body">
+  <div class="player-stage" id="stage"></div>
+
+  <div class="player-idle" id="idle">
+    <div class="big">🎬 Media Share</div>
+    <div>Waiting for the next approved clip…</div>
+  </div>
+
+  <div class="player-overlay hidden" id="overlay">
+    <span class="t" id="ovTitle"></span>
+    <span class="by" id="ovBy"></span>
+  </div>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="/static/player.js"></script>
+</body>
+</html>

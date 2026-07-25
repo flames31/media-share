@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Submit a clip · Media Share</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <h1>🎬 Media Share</h1>
+    <span class="badge">viewer submission</span>
+    <span class="spacer"></span>
+    <nav>
+      <a href="/player" target="_blank">Player</a>
+      <a href="/admin" target="_blank">Admin</a>
+    </nav>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <h2>Submit a clip</h2>
+
+      <div class="segmented" id="typeToggle">
+        <button type="button" data-type="youtube" class="active">YouTube</button>
+        <button type="button" data-type="upload">Upload</button>
+      </div>
+
+      <form id="submitForm" autocomplete="off">
+        <input type="hidden" name="type" id="fieldType" value="youtube">
+
+        <!-- YouTube fields -->
+        <div id="youtubeFields">
+          <label for="url">YouTube link</label>
+          <input type="url" id="url" name="url" placeholder="https://www.youtube.com/watch?v=…">
+          <div class="hint">A start time in the link (e.g. <code>&t=30s</code>) is picked up automatically.</div>
+
+          <div class="row">
+            <div>
+              <label for="start">Start time (seconds or mm:ss)</label>
+              <input type="text" id="start" name="start" placeholder="0">
+            </div>
+            <div>
+              <label for="durationYt">Play length (seconds)</label>
+              <input type="number" id="durationYt" name="duration" min="1" value="10">
+            </div>
+          </div>
+        </div>
+
+        <!-- Upload fields -->
+        <div id="uploadFields" class="hidden">
+          <label for="file">Media file</label>
+          <input type="file" id="file" name="file" accept="{{.AcceptAttr}}">
+          <div class="hint">Allowed: {{.AllowedExtDisplay}} · Max {{.MaxUploadMB}} MB.</div>
+
+          <label for="durationUp">Play length (seconds, 0 = whole file)</label>
+          <input type="number" id="durationUp" name="durationUpload" min="0" value="0">
+        </div>
+
+        <label for="name">Your name (optional)</label>
+        <input type="text" id="name" name="name" placeholder="Shown to the streamer" maxlength="40">
+
+        <label for="donation">Donation amount ($)</label>
+        <input type="number" id="donation" name="donation" placeholder="Coming soon" disabled>
+        <div class="hint">Payments are coming later — for now, set the play length directly above.</div>
+
+        <div style="margin-top:20px">
+          <button type="submit" class="btn primary" id="submitBtn">Add to queue</button>
+        </div>
+        <div id="result"></div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/submit.js"></script>
+</body>
+</html>

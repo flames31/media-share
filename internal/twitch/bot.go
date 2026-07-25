@@ -1,0 +1,189 @@
+// Package twitch implements a minimal Twitch chat (IRC-over-WebSocket) bot that
+// lets the broadcaster and moderators control the media queue with commands.
+package twitch
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/gorilla/websocket"
+
+	"media-share/internal/queue"
+)
+
+const ircURL = "wss://irc-ws.chat.twitch.tv:443"
+
+// Actions is the subset of the queue Manager the bot drives. It is satisfied by
+// *queue.Manager.
+type Actions interface {
+	Skip()
+	Pause()
+	Resume()
+	Clear(all bool)
+	NowPlaying() *queue.Item
+}
+
+// Bot connects to Twitch chat and dispatches mod-gated commands.
+type Bot struct {
+	channel  string // lowercase, no leading '#'
+	username string // bot login, lowercase
+	token    string // oauth token, with or without "oauth:" prefix
+
+	actions Actions
+}
+
+// New creates a Bot. token may include the "oauth:" prefix or not.
+func New(channel, username, token string, actions Actions) *Bot {
+	channel = strings.ToLower(strings.TrimPrefix(channel, "#"))
+	return &Bot{
+		channel:  channel,
+		username: strings.ToLower(username),
+		token:    ensureOAuthPrefix(token),
+		actions:  actions,
+	}
+}
+
+func ensureOAuthPrefix(t string) string {
+	t = strings.TrimSpace(t)
+	if t == "" {
+		return t
+	}
+	if !strings.HasPrefix(t, "oauth:") {
+		return "oauth:" + t
+	}
+	return t
+}
+
+// Run connects and processes messages until ctx is cancelled, reconnecting with
+// a backoff on any failure. It blocks; run it in its own goroutine.
+func (b *Bot) Run(ctx context.Context) {
+	backoff := time.Second
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := b.session(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("twitch: session ended: %v (reconnecting in %s)", err, backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+		backoff = time.Second
+	}
+}
+
+func (b *Bot) session(ctx context.Context) error {
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, ircURL, nil)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	// Close the connection when the context is cancelled so ReadMessage unblocks.
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+
+	send := func(format string, args ...any) error {
+		return conn.WriteMessage(websocket.TextMessage, fmt.Appendf(nil, format, args...))
+	}
+
+	// Request tags so we can read mod/broadcaster badges; then authenticate and join.
+	if err := send("CAP REQ :twitch.tv/tags twitch.tv/commands"); err != nil {
+		return err
+	}
+	if err := send("PASS %s", b.token); err != nil {
+		return err
+	}
+	if err := send("NICK %s", b.username); err != nil {
+		return err
+	}
+	if err := send("JOIN #%s", b.channel); err != nil {
+		return err
+	}
+	log.Printf("twitch: connected as %s in #%s", b.username, b.channel)
+
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("read: %w", err)
+		}
+		for line := range strings.SplitSeq(string(data), "\r\n") {
+			if line == "" {
+				continue
+			}
+			b.handleLine(conn, line)
+		}
+	}
+}
+
+func (b *Bot) handleLine(conn *websocket.Conn, line string) {
+	// Respond to server pings to stay connected.
+	if strings.HasPrefix(line, "PING") {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("PONG :tmi.twitch.tv"))
+		return
+	}
+
+	msg, ok := parsePrivmsg(line)
+	if !ok {
+		return
+	}
+
+	text := strings.TrimSpace(msg.Text)
+	if !strings.HasPrefix(text, "!") {
+		return
+	}
+	fields := strings.Fields(text)
+	cmd := strings.ToLower(fields[0])
+
+	// Only the broadcaster and moderators may control the queue.
+	if !msg.IsMod && !msg.IsBroadcaster {
+		return
+	}
+
+	switch cmd {
+	case "!skip", "!next":
+		b.actions.Skip()
+		b.reply(conn, "⏭ Skipped.")
+	case "!pause":
+		b.actions.Pause()
+		b.reply(conn, "⏸ Paused.")
+	case "!resume", "!play", "!unpause":
+		b.actions.Resume()
+		b.reply(conn, "▶ Resumed.")
+	case "!clear":
+		all := len(fields) > 1 && strings.EqualFold(fields[1], "all")
+		b.actions.Clear(all)
+		if all {
+			b.reply(conn, "🗑 Cleared everything.")
+		} else {
+			b.reply(conn, "🧹 Cleared the queue.")
+		}
+	case "!current", "!nowplaying", "!np":
+		if it := b.actions.NowPlaying(); it != nil {
+			by := ""
+			if it.SubmitterName != "" {
+				by = " (by " + it.SubmitterName + ")"
+			}
+			b.reply(conn, "▶ Now playing: "+it.Title+by)
+		} else {
+			b.reply(conn, "Nothing is playing right now.")
+		}
+	}
+}
+
+func (b *Bot) reply(conn *websocket.Conn, text string) {
+	_ = conn.WriteMessage(websocket.TextMessage, fmt.Appendf(nil, "PRIVMSG #%s :%s", b.channel, text))
+}

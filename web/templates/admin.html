@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin · Media Share</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <h1>🛠️ Media Share — Admin</h1>
+    <span class="badge" id="connBadge">connecting…</span>
+    <span class="spacer"></span>
+    <nav>
+      <a href="/submit" target="_blank">Submit</a>
+      <a href="/player" target="_blank">Player</a>
+      <a href="#" id="logout">Sign out</a>
+    </nav>
+  </header>
+
+  <!-- Token gate -->
+  <div class="wrap hidden" id="gate">
+    <div class="card">
+      <h2>Moderator sign in</h2>
+      <label for="token">Admin token</label>
+      <input type="text" id="token" placeholder="ADMIN_TOKEN value">
+      <div id="gateErr"></div>
+      <div style="margin-top:16px">
+        <button class="btn primary" id="gateBtn">Enter console</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Console -->
+  <div class="wrap hidden" id="console">
+    <div class="card">
+      <h2>Now playing &amp; controls</h2>
+      <div id="nowPlaying"></div>
+      <div class="controls" style="margin-top:14px">
+        <button class="btn" id="btnPause">⏸ Pause</button>
+        <button class="btn" id="btnSkip">⏭ Skip</button>
+        <button class="btn amber" id="btnClearQueue">🧹 Clear queue</button>
+        <button class="btn red" id="btnClearAll">🗑 Clear all</button>
+        <span class="spacer"></span>
+        <label class="toggle"><input type="checkbox" id="bypass"> Bypass verification</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Pending review (<span id="pendingCount">0</span>)</h2>
+      <div id="pending"><div class="empty">Nothing waiting for review.</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Approved queue (<span id="queueCount">0</span>)</h2>
+      <div id="queue"><div class="empty">Queue is empty.</div></div>
+    </div>
+  </div>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>
