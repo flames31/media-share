@@ -1,34 +1,36 @@
-// Package server wires HTTP handlers for the submission page, player, admin
-// console, and the JSON/WebSocket APIs.
+// Package server wires HTTP handlers for the platform: Twitch login, the admin
+// console, per-streamer players, viewer submissions, and the WebSocket API.
 package server
 
 import (
-	"crypto/subtle"
 	"html/template"
 	"log"
 	"net/http"
-	"strings"
 
+	"media-share/internal/auth"
 	"media-share/internal/config"
 	"media-share/internal/hub"
-	"media-share/internal/queue"
+	"media-share/internal/store"
+	"media-share/internal/tenant"
 	"media-share/web"
 )
 
 // Server holds shared dependencies for the HTTP handlers.
 type Server struct {
-	cfg  *config.Config
-	mgr  *queue.Manager
-	hub  *hub.Hub
-	tmpl map[string]*template.Template
-	mux  *http.ServeMux
+	cfg   *config.Config
+	store *store.Store
+	reg   *tenant.Registry
+	auth  *auth.Authenticator
+	hub   *hub.Hub
+	tmpl  map[string]*template.Template
+	mux   *http.ServeMux
 }
 
 // New builds a Server and parses templates. It panics if templates fail to
 // parse, since that is a programming error, not a runtime condition.
-func New(cfg *config.Config, mgr *queue.Manager, h *hub.Hub) *Server {
-	s := &Server{cfg: cfg, mgr: mgr, hub: h, tmpl: map[string]*template.Template{}}
-	for _, name := range []string{"submit", "player", "admin"} {
+func New(cfg *config.Config, st *store.Store, reg *tenant.Registry, a *auth.Authenticator, h *hub.Hub) *Server {
+	s := &Server{cfg: cfg, store: st, reg: reg, auth: a, hub: h, tmpl: map[string]*template.Template{}}
+	for _, name := range []string{"submit", "player", "admin", "login"} {
 		t, err := template.ParseFS(web.TemplatesFS, "templates/"+name+".html")
 		if err != nil {
 			log.Fatalf("parse template %s: %v", name, err)
@@ -47,28 +49,41 @@ func (s *Server) routes() {
 
 	// Pages
 	mux.HandleFunc("GET /", s.handleIndex)
+	mux.HandleFunc("GET /login", s.handleLoginPage)
+	mux.HandleFunc("GET /admin", s.requireStreamerPage(s.handleAdminPage))
 	mux.HandleFunc("GET /submit", s.handleSubmitPage)
-	mux.HandleFunc("GET /player", s.handlePlayerPage)
-	mux.HandleFunc("GET /admin", s.handleAdminPage)
+	mux.HandleFunc("GET /s/{token}", s.handleSubmitPage)
+	mux.HandleFunc("GET /p/{key}", s.handlePlayerPage)
 
-	// Public API
+	// Auth (Log in with Twitch)
+	mux.HandleFunc("GET /auth/twitch/start", s.handleAuthStart)
+	mux.HandleFunc("GET /auth/twitch/callback", s.handleAuthCallback)
+	mux.HandleFunc("POST /auth/dev/login", s.handleDevLogin)
+	mux.HandleFunc("POST /logout", s.handleLogout)
+
+	// Public API (tenant resolved from an invite token or player key)
 	mux.HandleFunc("POST /api/submit", s.handleSubmit)
-	mux.HandleFunc("GET /api/state", s.handleState)
+	mux.HandleFunc("GET /api/session/check", s.handleSessionCheck)
 	mux.HandleFunc("POST /api/player/ended", s.handlePlayerEnded)
-	mux.HandleFunc("GET /ws", s.hub.ServeWS)
+	mux.HandleFunc("GET /ws", s.handleWS)
 
-	// Admin API (auth-gated)
-	mux.HandleFunc("GET /api/admin/ping", s.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	}))
-	mux.HandleFunc("POST /api/admin/approve", s.requireAdmin(s.handleApprove))
-	mux.HandleFunc("POST /api/admin/reject", s.requireAdmin(s.handleReject))
-	mux.HandleFunc("POST /api/admin/remove", s.requireAdmin(s.handleRemove))
-	mux.HandleFunc("POST /api/admin/skip", s.requireAdmin(s.handleSkip))
-	mux.HandleFunc("POST /api/admin/pause", s.requireAdmin(s.handlePause))
-	mux.HandleFunc("POST /api/admin/resume", s.requireAdmin(s.handleResume))
-	mux.HandleFunc("POST /api/admin/clear", s.requireAdmin(s.handleClear))
-	mux.HandleFunc("POST /api/admin/bypass", s.requireAdmin(s.handleBypass))
+	// Admin API (cookie-gated; tenant taken from the authenticated streamer)
+	mux.HandleFunc("GET /api/admin/me", s.auth.RequireStreamer(s.handleMe))
+	mux.HandleFunc("GET /api/admin/state", s.auth.RequireStreamer(s.handleState))
+	mux.HandleFunc("POST /api/admin/approve", s.auth.RequireStreamer(s.handleApprove))
+	mux.HandleFunc("POST /api/admin/reject", s.auth.RequireStreamer(s.handleReject))
+	mux.HandleFunc("POST /api/admin/remove", s.auth.RequireStreamer(s.handleRemove))
+	mux.HandleFunc("POST /api/admin/skip", s.auth.RequireStreamer(s.handleSkip))
+	mux.HandleFunc("POST /api/admin/pause", s.auth.RequireStreamer(s.handlePause))
+	mux.HandleFunc("POST /api/admin/resume", s.auth.RequireStreamer(s.handleResume))
+	mux.HandleFunc("POST /api/admin/clear", s.auth.RequireStreamer(s.handleClear))
+	mux.HandleFunc("POST /api/admin/bypass", s.auth.RequireStreamer(s.handleBypass))
+
+	// Media-share session control
+	mux.HandleFunc("GET /api/admin/session", s.auth.RequireStreamer(s.handleSessionStatus))
+	mux.HandleFunc("POST /api/admin/session/start", s.auth.RequireStreamer(s.handleSessionStart))
+	mux.HandleFunc("POST /api/admin/session/stop", s.auth.RequireStreamer(s.handleSessionStop))
+	mux.HandleFunc("POST /api/admin/session/regenerate", s.auth.RequireStreamer(s.handleSessionRegenerate))
 
 	// Static assets (embedded) and uploaded media (on disk).
 	mux.Handle("GET /static/", http.FileServerFS(web.StaticFS))
@@ -77,22 +92,47 @@ func (s *Server) routes() {
 	s.mux = mux
 }
 
-// requireAdmin wraps a handler with bearer-token auth. If ADMIN_TOKEN is unset,
-// access is allowed (dev mode) — a startup warning is logged in config.Load.
-func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+// tenant returns the authenticated streamer's tenant. It must only be called
+// from handlers wrapped by RequireStreamer / requireStreamerPage.
+func (s *Server) tenant(r *http.Request) *tenant.Tenant {
+	st, _ := auth.StreamerFrom(r.Context())
+	return s.reg.Get(st.ID)
+}
+
+// requireStreamerPage gates a page on login, redirecting to /login when absent.
+func (s *Server) requireStreamerPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.AdminToken != "" && !s.validToken(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		st, err := s.auth.Authenticate(r)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(auth.WithStreamer(r.Context(), st)))
 	}
 }
 
-func (s *Server) validToken(r *http.Request) bool {
-	got := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	if got == "" {
-		return false
+// handleWS resolves the room/role securely, then upgrades the connection.
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	role := hub.Role(r.URL.Query().Get("role"))
+	var room string
+	switch role {
+	case hub.RoleAdmin:
+		st, err := s.auth.Authenticate(r)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		room = st.ID
+	case hub.RolePlayer:
+		st, err := s.store.GetStreamerByPlayerKey(r.URL.Query().Get("key"))
+		if err != nil {
+			http.Error(w, "player not found", http.StatusNotFound)
+			return
+		}
+		room = st.ID
+	default:
+		http.Error(w, "invalid role", http.StatusBadRequest)
+		return
 	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.AdminToken)) == 1
+	s.hub.ServeWS(w, r, room, role)
 }

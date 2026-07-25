@@ -8,6 +8,33 @@
   var result = document.getElementById("result");
   var btn = document.getElementById("submitBtn");
 
+  // --- Session gating ---
+  var token = window.__SESSION_TOKEN__ || "";
+  var closedCard = document.getElementById("closedCard");
+  var formCard = document.getElementById("formCard");
+  var closedMsg = document.getElementById("closedMsg");
+
+  function showClosed(msg) {
+    formCard.classList.add("hidden");
+    closedCard.classList.remove("hidden");
+    if (msg) closedMsg.textContent = msg;
+  }
+  function showForm() {
+    closedCard.classList.add("hidden");
+    formCard.classList.remove("hidden");
+  }
+  function checkSession() {
+    if (!token) { showClosed(); return Promise.resolve(false); }
+    return fetch("/api/session/check?s=" + encodeURIComponent(token))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.valid) { showForm(); return true; }
+        showClosed();
+        return false;
+      })
+      .catch(function () { return false; });
+  }
+
   toggle.addEventListener("click", function (e) {
     var b = e.target.closest("button[data-type]");
     if (!b) return;
@@ -31,6 +58,7 @@
 
     var fd = new FormData();
     fd.append("type", currentType);
+    fd.append("session", token);
     fd.append("name", document.getElementById("name").value.trim());
 
     if (currentType === "youtube") {
@@ -50,9 +78,10 @@
     btn.textContent = "Submitting…";
 
     fetch("/api/submit", { method: "POST", body: fd })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
       .then(function (res) {
         if (!res.ok) {
+          if (res.status === 403) { showClosed(res.body.error); return; }
           notice("err", res.body.error || "Submission failed.");
           return;
         }
@@ -77,4 +106,9 @@
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
+
+  // Validate on load, then poll so the page closes promptly if the streamer
+  // stops the session (or regenerates the link) while it's open.
+  checkSession();
+  setInterval(checkSession, 10000);
 })();

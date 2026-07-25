@@ -1,9 +1,10 @@
 # Media Share
 
-A Twitch media-share queue. Viewers submit YouTube clips (or upload their own
-media); moderators verify submissions in an admin console; approved clips play on
-a standalone player page you capture in your streaming software. Moderators can
-also control the queue from Twitch chat (`!skip`, `!pause`, …).
+A **multi-tenant** Twitch media-share platform. Streamers **log in with Twitch**,
+open a submission session, and share an invite link; viewers submit YouTube clips
+(or upload their own media) to that streamer's queue; the streamer moderates in
+their console and plays approved clips on their own player page (an OBS browser
+source). Many streamers run isolated sessions at the same time — no crosstalk.
 
 Payments are **not** wired up yet — for now the play length is entered manually on
 the submission form. That field is where the future donation→duration formula
@@ -11,43 +12,80 @@ the submission form. That field is where the future donation→duration formula
 
 ## Features
 
-- **Single submission page** (`/submit`) — YouTube link + start time + play
-  length, or a media-file upload.
-- **Player page** (`/player`) — auto-plays the approved queue. YouTube via the
-  IFrame API (honours the start time and stops after the set length); uploads via
-  an HTML5 `<video>`. Add it as a Browser source / capture the tab on stream.
-- **Admin console** (`/admin`) — live view of pending submissions (with
-  thumbnails/previews), approve/reject, the approved queue with remove, and
+- **Log in with Twitch** — a streamer's Twitch account is their workspace. Open,
+  self-serve; no passwords. Accounts + login sessions persist in SQLite.
+- **Per-streamer isolation** — each streamer has their own queue, session, invite
+  link, and player, keyed by their Twitch account. WebSocket updates are scoped
+  per streamer (rooms).
+- **Streamer-controlled sessions** — submissions are closed until the streamer
+  clicks **Start media share**, which generates a shareable invite link
+  (`/s/<token>`). **Stop** (or **Regenerate link**) invalidates old links at once.
+- **Submission page** (via the invite link) — YouTube link + start time + play
+  length, or a media-file upload. Shows "Media share is closed" when there's no
+  open session.
+- **Per-streamer player** (`/p/<key>`) — a stable capability URL for OBS that
+  auto-plays that streamer's approved queue. YouTube via the IFrame API (honours
+  start time, stops after the set length); uploads via an HTML5 `<video>`.
+- **Admin console** (`/admin`, behind Twitch login) — live pending review
+  (thumbnails/previews), approve/reject, the approved queue with remove, and
   controls: **Skip**, **Pause/Resume**, **Clear queue**, **Clear all**, and a
-  **Bypass verification** toggle (auto-approve submissions).
-- **Twitch chat commands** (broadcaster + mods only): `!skip` / `!next`,
-  `!pause`, `!resume`, `!clear [all]`, `!current`.
-- Everything updates in real time over WebSockets. State is in-memory; uploaded
-  files persist under `MEDIA_DIR`.
+  **Bypass verification** toggle. Shows the invite link and the OBS player URL.
+- Everything updates in real time over WebSockets. Queue/session state is
+  in-memory per streamer; uploaded files persist under `MEDIA_DIR`.
+
+> The Twitch chat bot (`!skip`, `!pause`, …) from the single-tenant version is
+> **deferred** in the platform build; the `internal/twitch` package is kept for a
+> future per-streamer re-wire.
 
 ## Requirements
 
 - Go 1.24+
 
+## Setup: register one Twitch app (operator, once)
+
+Streamers log in with Twitch, so the person running the server registers **one**
+Twitch application:
+
+1. Go to <https://dev.twitch.tv/console/apps> → Register Your Application.
+2. **OAuth Redirect URL:** `http://localhost:8080/auth/twitch/callback`
+   (must match `PORT` / `PUBLIC_BASE_URL`; add your deployed `https://…/auth/twitch/callback` when hosting).
+3. Copy the **Client ID** and generate a **Client Secret**.
+
 ## Run
 
 ```sh
-# minimal
-ADMIN_TOKEN=test go run .
+cp .env.example .env      # fill in TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET
+go run .                  # .env in the working dir is loaded automatically
 
-# or via .env
-cp .env.example .env      # edit values
-export $(grep -v '^#' .env | xargs) && go run .
+# or inline (real env vars override .env)
+TWITCH_CLIENT_ID=xxxx TWITCH_CLIENT_SECRET=yyyy go run .
 ```
 
-Then open:
+The server reads a `.env` file from the working directory on startup (override the
+path with `ENV_FILE=/path/to/.env`). Values already set in the real environment
+take precedence.
 
-- Submission: <http://localhost:8080/submit>
-- Player:     <http://localhost:8080/player>
-- Admin:      <http://localhost:8080/admin>  (enter `ADMIN_TOKEN`)
+Then open <http://localhost:8080/> and **Log in with Twitch**.
 
-> If `ADMIN_TOKEN` is empty the admin console is unprotected — fine for local
-> testing, but set a token before exposing the server.
+> **Just want to try it without registering a Twitch app?** Run with `DEV_LOGIN=1`
+> (e.g. `DEV_LOGIN=1 go run .`) to get a password-less **Dev login** button on the
+> home page. It logs you in as a local dev account. **Local testing only — never
+> enable in production.**
+
+## How it works
+
+1. **Streamer logs in** at `/login` → lands on their console at `/admin`.
+2. The console shows the streamer's **OBS player URL** (`/p/<key>`) — add it as a
+   Browser source. It stays the same across sessions and restarts.
+3. Click **Start media share** → copy the **invite link** (`/s/<token>`) and share
+   it with viewers (chat, panel, etc.).
+4. Viewers open the link, submit a YouTube clip or upload; it appears under
+   **Pending review**. Approve/reject; approved clips auto-play on the player.
+5. Click **Stop media share** (or **Regenerate link**) to close submissions — old
+   links stop working immediately.
+
+Each streamer only ever sees and controls their own queue; sessions run
+concurrently and independently.
 
 ## Configuration
 
@@ -56,66 +94,58 @@ All configuration is via environment variables (see `.env.example`):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port |
-| `ADMIN_TOKEN` | _(empty)_ | Bearer token for the admin console/API |
+| `PUBLIC_BASE_URL` | _(empty)_ | Base URL for OAuth redirect + links; defaults to `http://localhost:<PORT>`. HTTPS enables Secure cookies |
+| `DB_PATH` | `./data/media-share.db` | SQLite database (accounts + login sessions) |
 | `MEDIA_DIR` | `./media` | Where uploads are stored |
 | `MAX_UPLOAD_MB` | `100` | Upload size cap |
 | `ALLOWED_MEDIA_EXT` | `mp4,webm,mov,ogg` | Allowed upload extensions |
-| `TWITCH_CHANNEL` | _(empty)_ | Channel to join (bot enabled only when all 3 Twitch vars are set) |
-| `TWITCH_BOT_USERNAME` | _(empty)_ | Bot account login |
-| `TWITCH_OAUTH_TOKEN` | _(empty)_ | Chat OAuth token (`oauth:` prefix optional) |
-
-## Enabling Twitch chat control
-
-1. **Use a bot account.** Either your own account or a separate account you
-   create for the bot. Whichever account the token belongs to is who chat
-   messages come from.
-2. **Get a chat OAuth token** with the `chat:read` and `chat:edit` scopes:
-   - Fastest: while logged in as the bot account, generate a token with a
-     community token generator such as <https://twitchtokengenerator.com> (pick
-     the "Bot Chat Token" preset), or
-   - Register your own app at <https://dev.twitch.tv/console/apps> and run the
-     OAuth flow to mint a token with those scopes.
-3. **Set the env vars** and restart:
-
-   ```sh
-   TWITCH_CHANNEL=your_channel \
-   TWITCH_BOT_USERNAME=your_bot_account \
-   TWITCH_OAUTH_TOKEN=oauth:xxxxxxxxxxxxxxxxxxxx \
-   ADMIN_TOKEN=test go run .
-   ```
-
-   You should see `twitch: connected as <bot> in #<channel>` in the logs. In
-   chat, as the broadcaster or a mod, try `!current` — the bot replies with the
-   now-playing title.
-
-### Chat commands
-
-| Command | Action |
-| --- | --- |
-| `!skip`, `!next` | Skip the current clip |
-| `!pause` | Pause playback |
-| `!resume`, `!play` | Resume playback |
-| `!clear` | Clear the approved queue |
-| `!clear all` | Clear pending, queue, and now-playing |
-| `!current`, `!np` | Show what's playing |
-
-Commands are ignored for non-moderators.
+| `TWITCH_CLIENT_ID` | _(empty)_ | Twitch app Client ID (**required** for login) |
+| `TWITCH_CLIENT_SECRET` | _(empty)_ | Twitch app Client Secret (**required** for login) |
+| `DEV_LOGIN` | _(off)_ | `1` shows a local password-less "Dev login" button — testing only, never in production |
 
 ## Project layout
 
 ```
-main.go                     wiring: config → manager → hub → server → bot
+main.go                     wiring: config → store(DB) → registry → auth → hub → server
 internal/
   config/                   env configuration
+  store/                    SQLite: streamers + login sessions (+ tests)
+  oauth/                    Twitch "Log in with Twitch" OAuth client (+ tests)
+  auth/                     login flow, cookie sessions, RequireStreamer middleware
+  tenant/                   per-streamer registry (queue+session), token/key indexes (+ tests)
   queue/                    queue Manager, state machine, YouTube URL parsing (+ tests)
-  hub/                      WebSocket fan-out
-  server/                   HTTP handlers (pages, submit, admin, player, ws)
-  twitch/                   IRC-over-WebSocket chat bot (+ parser tests)
+  session/                  streamer-controlled submission sessions (+ tests)
+  hub/                      room-scoped WebSocket fan-out (+ tests)
+  server/                   HTTP handlers (login, admin, player, submit, ws)
+  twitch/                   chat bot — kept for a future per-streamer re-wire (deferred)
 web/
-  templates/                submit / player / admin pages (embedded)
+  templates/                login / admin / player / submit pages (embedded)
   static/                   CSS + vanilla JS (embedded)
 media/                      uploaded files (gitignored)
+data/                       SQLite database (gitignored)
 ```
+
+## Documentation
+
+Detailed docs live in [`docs/`](docs/):
+
+- [`docs/architecture.md`](docs/architecture.md) — layers, the tenant model, trust
+  boundaries, concurrency.
+- [`docs/data-flows.md`](docs/data-flows.md) — login, sessions, submission,
+  moderation, playback, WS rooms.
+- [`docs/http-api.md`](docs/http-api.md) — every route.
+- [`docs/data-model.md`](docs/data-model.md) — SQLite schema + in-memory state.
+- [`docs/agents/`](docs/agents/) — onboarding for AI coding agents: a code map,
+  debugging playbook, feature recipes, and the invariants to uphold.
+
+## Security notes
+
+- Login sessions are opaque random ids stored in SQLite and set as HttpOnly,
+  SameSite=Lax cookies (Secure over HTTPS). Admin scope is always taken from the
+  cookie — never from client-supplied ids.
+- Invite tokens and player keys are unguessable capability URLs, meant to be
+  shared. Stopping/regenerating a session invalidates old invite links at once.
+- Admin state-changing requests are same-origin-guarded (SameSite + Sec-Fetch-Site).
 
 ## Testing
 
@@ -125,8 +155,8 @@ go test ./...
 
 ## Roadmap / deferred
 
+- Per-streamer Twitch chat bot (`!skip`, `!pause`, …) — re-wire `internal/twitch`
+  per tenant.
 - Payments and the real donation→duration formula (the manual length field is the
   placeholder).
-- Optional persistence (queue is in-memory; a JSON snapshot could survive
-  restarts).
-- Per-user rate limiting / anti-spam.
+- Per-user rate limiting / anti-spam; idle-tenant eviction; queue persistence.

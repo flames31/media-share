@@ -26,24 +26,29 @@ type Actions interface {
 	NowPlaying() *queue.Item
 }
 
-// Bot connects to Twitch chat and dispatches mod-gated commands.
-type Bot struct {
-	channel  string // lowercase, no leading '#'
-	username string // bot login, lowercase
-	token    string // oauth token, with or without "oauth:" prefix
-
-	actions Actions
+// Creds are the credentials the bot needs to authenticate a chat connection.
+type Creds struct {
+	AccessToken string // without the "oauth:" prefix
+	Login       string // bot account login (lowercase)
+	Channel     string // channel to join (lowercase, no '#')
 }
 
-// New creates a Bot. token may include the "oauth:" prefix or not.
-func New(channel, username, token string, actions Actions) *Bot {
-	channel = strings.ToLower(strings.TrimPrefix(channel, "#"))
-	return &Bot{
-		channel:  channel,
-		username: strings.ToLower(username),
-		token:    ensureOAuthPrefix(token),
-		actions:  actions,
-	}
+// CredsFunc returns fresh credentials for a connection. It is called before each
+// (re)connect so the controller can refresh an expired token transparently.
+type CredsFunc func(ctx context.Context) (Creds, error)
+
+// Bot connects to Twitch chat and dispatches mod-gated commands. Credentials are
+// obtained lazily via creds so token refresh is handled outside the IRC logic.
+type Bot struct {
+	creds   CredsFunc
+	actions Actions
+
+	channel string // set at the start of each session; used by reply()
+}
+
+// NewBot creates a Bot that authenticates using credentials from creds.
+func NewBot(creds CredsFunc, actions Actions) *Bot {
+	return &Bot{creds: creds, actions: actions}
 }
 
 func ensureOAuthPrefix(t string) string {
@@ -82,6 +87,14 @@ func (b *Bot) Run(ctx context.Context) {
 }
 
 func (b *Bot) session(ctx context.Context) error {
+	creds, err := b.creds(ctx)
+	if err != nil {
+		return fmt.Errorf("credentials: %w", err)
+	}
+	b.channel = strings.ToLower(strings.TrimPrefix(creds.Channel, "#"))
+	username := strings.ToLower(creds.Login)
+	pass := ensureOAuthPrefix(creds.AccessToken)
+
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, ircURL, nil)
@@ -104,16 +117,16 @@ func (b *Bot) session(ctx context.Context) error {
 	if err := send("CAP REQ :twitch.tv/tags twitch.tv/commands"); err != nil {
 		return err
 	}
-	if err := send("PASS %s", b.token); err != nil {
+	if err := send("PASS %s", pass); err != nil {
 		return err
 	}
-	if err := send("NICK %s", b.username); err != nil {
+	if err := send("NICK %s", username); err != nil {
 		return err
 	}
 	if err := send("JOIN #%s", b.channel); err != nil {
 		return err
 	}
-	log.Printf("twitch: connected as %s in #%s", b.username, b.channel)
+	log.Printf("twitch: connected as %s in #%s", username, b.channel)
 
 	for {
 		_, data, err := conn.ReadMessage()
@@ -124,10 +137,18 @@ func (b *Bot) session(ctx context.Context) error {
 			if line == "" {
 				continue
 			}
+			// Twitch reports a bad/expired token via a NOTICE. Surface it as an
+			// error so the reconnect loop refreshes credentials on the next try.
+			if strings.Contains(line, "Login authentication failed") || strings.Contains(line, "Login unsuccessful") {
+				return errAuthFailed
+			}
 			b.handleLine(conn, line)
 		}
 	}
 }
+
+// errAuthFailed signals the token was rejected by Twitch.
+var errAuthFailed = fmt.Errorf("twitch login authentication failed")
 
 func (b *Bot) handleLine(conn *websocket.Conn, line string) {
 	// Respond to server pings to stay connected.

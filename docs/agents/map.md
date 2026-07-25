@@ -1,0 +1,71 @@
+# Code map — "I need to change X → open Y"
+
+Repo-relative paths. Line counts are rough; treat them as "how big is this."
+
+## Entry point & wiring
+
+| File | Responsibility |
+| --- | --- |
+| `main.go` | Boot: load config → open SQLite → build hub + registry (`h.OnConnect = reg.InitialMessages`) → oauth client → authenticator → server → HTTP server + graceful shutdown. **This is where dependencies are constructed.** |
+
+## `internal/server` — HTTP layer (the only package that speaks HTTP)
+
+| File | What's in it |
+| --- | --- |
+| `server.go` | `Server` struct, `New` (parses templates), **`routes()` = the full route table**, `tenant(r)` (authed streamer → tenant), `requireStreamerPage`, `handleWS` (secure room resolution). |
+| `render.go` | `writeJSON`/`writeErr`, `render` (buffered template exec), page handlers: `handleIndex`, `handleLoginPage`, `handleAdminPage`, `handleSubmitPage`, `handlePlayerPage`, plus `handleState`, `handleMe`. |
+| `handlers_auth.go` | `handleAuthStart`, `handleAuthCallback`, `handleDevLogin`, `handleLogout`, `redirectLoginError`. |
+| `handlers_admin.go` | Queue moderation endpoints: approve/reject/remove/skip/pause/resume/clear/bypass. Shared `decode` (strict, `DisallowUnknownFields`) + `idBody`/`writeOK` helpers; each calls `s.tenant(r).Queue.*`. |
+| `handlers_session.go` | `sessionLink`, `adminSessionView`, `handleSessionCheck` (public), and session status/start/stop/regenerate. |
+| `handlers_submit.go` | `handleSubmit` (+ `submitYouTube`, `submitUpload`) and parsing helpers (`parseStart`, `clampDuration`, `origTitle`). The token gate lives here. |
+| `handlers_player.go` | `handlePlayerEnded` (player key → tenant → `Queue.Ended`). |
+
+> There's also a small `decode`/`writeOK` helper used by admin/player handlers —
+> grep for them if you add a handler that needs JSON-body decoding.
+
+## Domain packages (no HTTP knowledge)
+
+| Package / file | What's in it |
+| --- | --- |
+| `internal/tenant/registry.go` | `Registry`, `Tenant`, `Get` (lazy, wires broadcasts to the room), `ResolveSession`, `InitialMessages`, `reindex`, and `StartSession`/`RegenerateSession`/`StopSession`. **Tenant isolation lives here.** |
+| `internal/queue/queue.go` | `Manager`, `Item`, `Snapshot`, the state machine, all mutations. |
+| `internal/queue/youtube.go` | `ParseYouTube` — id + start-time extraction from various YouTube URL shapes. |
+| `internal/session/session.go` | `Manager` for the streamer-controlled submission window; secret token vs. public `Status`. |
+| `internal/hub/hub.go` | `Hub`, rooms, `BroadcastTo`, `ServeWS`, `OnConnect`, read/write pumps, ping/pong. |
+
+## Auth & identity
+
+| File | What's in it |
+| --- | --- |
+| `internal/auth/auth.go` | `Authenticator`: `AuthorizeURL`, `Login`, `DevLogin`, `Logout`, `Authenticate`, `RequireStreamer`, cookie helpers, OAuth `state` store, `sameSite` CSRF guard, `WithStreamer`/`StreamerFrom`. |
+| `internal/oauth/oauth.go` | Twitch Authorization-Code client: `AuthorizeURL`, `ExchangeCodeForUser`, `getUser` (Helix). Endpoints are package vars for test stubbing. |
+| `internal/store/store.go` | SQLite: `Open`/`migrate`, `Streamer`, `UpsertStreamer`, `GetStreamer`, `GetStreamerByPlayerKey`, `CreateAuthSession`, `GetValidAuthSession`, `DeleteAuthSession`. |
+
+## Config
+
+| File | What's in it |
+| --- | --- |
+| `internal/config/config.go` | `Config` struct + `Load()`; derived helpers `OAuthEnabled`, `BaseURL`, `TwitchRedirectURI`, `CookieSecure`, `MaxUploadBytes`, `ExtAllowed`; `env`/`envInt`/`envBool` readers. |
+| `internal/config/dotenv.go` | `.env` loader (`loadDotEnv`, `parseDotEnvLine`). Real env wins; `ENV_FILE` overrides path; missing file is fine. |
+
+## Frontend (embedded via `web/embed.go`)
+
+| File | Page |
+| --- | --- |
+| `web/templates/login.html` | Login: Twitch button + optional Dev-login. |
+| `web/templates/admin.html` + `web/static/admin.js` | Console: cookie auth, session card, player-URL card, pending/queue/now-playing, controls. WS `role=admin`. |
+| `web/templates/player.html` + `web/static/player.js` | OBS player: injects `__PLAYER_KEY__`; WS `role=player&key=`; posts `/api/player/ended`. |
+| `web/templates/submit.html` + `web/static/submit.js` | Viewer submission form; uses the injected invite token. |
+| `web/static/app.css` | Shared styles. |
+| `web/templates/twitch_callback.html` | Legacy/aux callback template. |
+
+## Deferred (present, not wired into the running server)
+
+| Path | Status |
+| --- | --- |
+| `internal/twitch/` (`bot.go`, `controller.go`, `oauth.go`, `store.go`, `parse.go` + tests) | The single-tenant chat bot (`!skip`, `!pause`, …). Compiles and tests pass, but `main.go` does not start it. A future phase re-wires it per tenant. Don't assume any of it executes at runtime. |
+
+## Tests (mirror their packages)
+
+`*_test.go` next to each package: `config` (dotenv), `store`, `oauth`, `queue`,
+`session`, `hub`, `tenant`, and `twitch`. Run `go test ./...`.

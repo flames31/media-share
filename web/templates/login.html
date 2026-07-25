@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Media Share</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <h1>🎬 Media Share</h1>
+    <span class="badge">platform</span>
+  </header>
+
+  <div class="wrap" style="max-width:520px">
+    {{if .Error}}
+      <div class="notice err">{{.Error}}</div>
+    {{end}}
+
+    <div class="card" style="text-align:center">
+      <h2 style="justify-content:center">For streamers</h2>
+      <p class="hint">Log in with your Twitch account to open a media-share session,
+        moderate submissions, and get your player link for OBS.</p>
+      {{if .OAuthEnabled}}
+        <a class="btn primary" href="/auth/twitch/start" style="margin-top:12px">🎮 Log in with Twitch</a>
+      {{else}}
+        <div class="notice err" style="margin-top:12px;text-align:left">
+          <strong>Twitch login isn't set up on this server.</strong>
+          <div class="hint" style="margin-top:8px">The operator needs to register one Twitch app at
+            <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener">dev.twitch.tv/console/apps</a>
+            (redirect URL <code>/auth/twitch/callback</code>) and set
+            <code>TWITCH_CLIENT_ID</code> + <code>TWITCH_CLIENT_SECRET</code>.
+            To just try it locally, restart with <code>DEV_LOGIN=1</code>.</div>
+        </div>
+      {{end}}
+
+      {{if .DevLogin}}
+        <form method="POST" action="/auth/dev/login" style="margin-top:12px">
+          <button class="btn" type="submit">🧪 Dev login (local testing)</button>
+        </form>
+        <div class="hint" style="margin-top:6px">DEV_LOGIN is on — this bypasses Twitch. Local use only.</div>
+      {{end}}
+    </div>
+
+    <div class="card" style="text-align:center">
+      <h2 style="justify-content:center">For viewers</h2>
+      <p class="hint">You don't need an account. Use the invite link your streamer
+        shares to submit a clip while their media share is open.</p>
+    </div>
+  </div>
+</body>
+</html>

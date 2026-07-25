@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Twitch · Media Share</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="wrap" style="max-width:480px">
+    <div class="card" style="text-align:center">
+      {{if .OK}}
+        <div style="font-size:40px">✅</div>
+        <h2>Connected</h2>
+        <p>Bot connected: <strong>{{.OK}}</strong></p>
+        <p class="hint">You can close this window.</p>
+      {{else}}
+        <div style="font-size:40px">⚠️</div>
+        <h2>Couldn't connect</h2>
+        <p class="notice err">{{.Error}}</p>
+      {{end}}
+      <button class="btn primary" id="closeBtn" style="margin-top:16px">Close</button>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var ok = {{if .OK}}true{{else}}false{{end}};
+      try {
+        if (window.opener) {
+          window.opener.postMessage({ type: ok ? "twitch-connected" : "twitch-error" }, window.location.origin);
+        }
+      } catch (e) {}
+      document.getElementById("closeBtn").addEventListener("click", function () { window.close(); });
+      if (ok) setTimeout(function () { window.close(); }, 1200);
+    })();
+  </script>
+</body>
+</html>

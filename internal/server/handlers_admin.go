@@ -29,7 +29,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	if !s.mgr.Approve(b.ID) {
+	if !s.tenant(r).Queue.Approve(b.ID) {
 		writeErr(w, http.StatusNotFound, "item not found")
 		return
 	}
@@ -42,7 +42,7 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	if !s.mgr.Reject(b.ID) {
+	if !s.tenant(r).Queue.Reject(b.ID) {
 		writeErr(w, http.StatusNotFound, "item not found")
 		return
 	}
@@ -55,7 +55,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	if !s.mgr.Remove(b.ID) {
+	if !s.tenant(r).Queue.Remove(b.ID) {
 		writeErr(w, http.StatusNotFound, "item not found")
 		return
 	}
@@ -63,17 +63,17 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
-	s.mgr.Skip()
+	s.tenant(r).Queue.Skip()
 	writeOK(w)
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
-	s.mgr.Pause()
+	s.tenant(r).Queue.Pause()
 	writeOK(w)
 }
 
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
-	s.mgr.Resume()
+	s.tenant(r).Queue.Resume()
 	writeOK(w)
 }
 
@@ -82,7 +82,7 @@ func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 		Scope string `json:"scope"`
 	}
 	_ = decode(r, &b)
-	s.mgr.Clear(b.Scope == "all")
+	s.tenant(r).Queue.Clear(b.Scope == "all")
 	writeOK(w)
 }
 
@@ -94,7 +94,7 @@ func (s *Server) handleBypass(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad request")
 		return
 	}
-	s.mgr.SetBypass(b.Enabled)
+	s.tenant(r).Queue.SetBypass(b.Enabled)
 	writeOK(w)
 }
 

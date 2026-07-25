@@ -28,19 +28,21 @@ type Message struct {
 
 type client struct {
 	conn *websocket.Conn
+	room string
 	role Role
 	send chan []byte
 }
 
-// Hub tracks connected clients and broadcasts messages to them.
+// Hub tracks connected clients, grouped into rooms, and broadcasts messages to a
+// room's members. Each streamer is a room, so tenants are isolated.
 type Hub struct {
 	mu      sync.Mutex
 	clients map[*client]struct{}
 
 	upgrader websocket.Upgrader
 
-	// StateProvider returns the current state, sent to a client on connect.
-	StateProvider func() any
+	// OnConnect returns the initial messages to send a client for its room/role.
+	OnConnect func(room, role string) []Message
 }
 
 // New creates a Hub. checkOrigin controls the WebSocket origin policy; pass nil
@@ -55,9 +57,8 @@ func New(checkOrigin func(*http.Request) bool) *Hub {
 	}
 }
 
-// Broadcast sends a message of the given type with the given payload to every
-// connected client.
-func (h *Hub) Broadcast(msgType string, payload any) {
+// BroadcastTo sends a message to every client in the given room.
+func (h *Hub) BroadcastTo(room, msgType string, payload any) {
 	data, err := json.Marshal(Message{Type: msgType, Payload: payload})
 	if err != nil {
 		log.Printf("hub: marshal %s: %v", msgType, err)
@@ -65,6 +66,9 @@ func (h *Hub) Broadcast(msgType string, payload any) {
 	}
 	h.mu.Lock()
 	for c := range h.clients {
+		if c.room != room {
+			continue
+		}
 		select {
 		case c.send <- data:
 		default:
@@ -76,27 +80,26 @@ func (h *Hub) Broadcast(msgType string, payload any) {
 	h.mu.Unlock()
 }
 
-// ServeWS upgrades an HTTP request to a WebSocket connection and registers it.
-// The client role is read from the ?role= query parameter.
-func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+// ServeWS upgrades an HTTP request to a WebSocket connection and registers it in
+// the given room with the given role. The caller is responsible for resolving
+// (and authorizing) room/role — they are never trusted from the client.
+func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, room string, role Role) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return // upgrader already wrote an error response
 	}
-	role := Role(r.URL.Query().Get("role"))
-	if role != RolePlayer && role != RoleAdmin {
-		role = RolePlayer
-	}
-	c := &client{conn: conn, role: role, send: make(chan []byte, 16)}
+	c := &client{conn: conn, room: room, role: role, send: make(chan []byte, 16)}
 
 	h.mu.Lock()
 	h.clients[c] = struct{}{}
 	h.mu.Unlock()
 
 	// Send the current state immediately so the new client renders without waiting.
-	if h.StateProvider != nil {
-		if data, err := json.Marshal(Message{Type: "state", Payload: h.StateProvider()}); err == nil {
-			c.send <- data
+	if h.OnConnect != nil {
+		for _, m := range h.OnConnect(room, string(role)) {
+			if data, err := json.Marshal(m); err == nil {
+				c.send <- data
+			}
 		}
 	}
 

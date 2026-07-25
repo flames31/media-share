@@ -3,36 +3,56 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Admin · Media Share</title>
+  <title>Console · Media Share</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <header class="top">
-    <h1>🛠️ Media Share — Admin</h1>
+    <h1>🛠️ Media Share</h1>
     <span class="badge" id="connBadge">connecting…</span>
     <span class="spacer"></span>
     <nav>
-      <a href="/submit" target="_blank">Submit</a>
-      <a href="/player" target="_blank">Player</a>
+      <span class="badge">👤 {{.DisplayName}}</span>
+      <a href="#" id="openPlayer">Player</a>
       <a href="#" id="logout">Sign out</a>
     </nav>
   </header>
 
-  <!-- Token gate -->
-  <div class="wrap hidden" id="gate">
+  <div class="wrap" id="console">
     <div class="card">
-      <h2>Moderator sign in</h2>
-      <label for="token">Admin token</label>
-      <input type="text" id="token" placeholder="ADMIN_TOKEN value">
-      <div id="gateErr"></div>
-      <div style="margin-top:16px">
-        <button class="btn primary" id="gateBtn">Enter console</button>
+      <h2>Your player (add to OBS)</h2>
+      <label for="playerLink">Browser-source URL</label>
+      <div class="row" style="align-items:stretch">
+        <input type="text" id="playerLink" readonly style="flex:3" value="{{.PlayerURL}}">
+        <button class="btn" id="playerCopyBtn" style="flex:none">📋 Copy</button>
+      </div>
+      <div class="hint">Add this as a Browser source in OBS. It plays your approved queue.</div>
+    </div>
+
+    <div class="card" id="sessionCard">
+      <h2>Media share session</h2>
+      <div id="sessionStatus"></div>
+      <!-- closed view -->
+      <div id="sessionClosed" class="hidden">
+        <p class="hint">Submissions are closed. Start a session to generate an invite link viewers can use to request clips.</p>
+        <button class="btn primary" id="sessionStartBtn">▶ Start media share</button>
+      </div>
+      <!-- open view -->
+      <div id="sessionOpen" class="hidden">
+        <label for="sessionLink">Share this link with viewers</label>
+        <div class="row" style="align-items:stretch">
+          <input type="text" id="sessionLink" readonly style="flex:3">
+          <button class="btn" id="sessionCopyBtn" style="flex:none">📋 Copy</button>
+        </div>
+        <div class="controls" style="margin-top:14px">
+          <button class="btn red" id="sessionStopBtn">⏹ Stop media share</button>
+          <button class="btn ghost" id="sessionRegenBtn">🔄 Regenerate link</button>
+          <span class="spacer"></span>
+          <span class="hint" id="sessionUptime"></span>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- Console -->
-  <div class="wrap hidden" id="console">
     <div class="card">
       <h2>Now playing &amp; controls</h2>
       <div id="nowPlaying"></div>
@@ -57,6 +77,7 @@
     </div>
   </div>
 
+  <form id="logoutForm" method="POST" action="/logout" class="hidden"></form>
   <script src="/static/admin.js"></script>
 </body>
 </html>

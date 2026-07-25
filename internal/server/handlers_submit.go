@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"media-share/internal/queue"
+	"media-share/internal/tenant"
 )
 
 // handleSubmit accepts a multipart submission (YouTube link or file upload) and
@@ -25,6 +26,14 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Submissions are only accepted while an open session's invite token resolves
+	// to a streamer. This is the authoritative check; the page gate is just UX.
+	t, ok := s.reg.ResolveSession(strings.TrimSpace(r.FormValue("session")))
+	if !ok {
+		writeErr(w, http.StatusForbidden, "Media share is closed right now.")
+		return
+	}
+
 	name := strings.TrimSpace(r.FormValue("name"))
 	if len(name) > 40 {
 		name = name[:40]
@@ -32,15 +41,15 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 
 	switch r.FormValue("type") {
 	case "youtube":
-		s.submitYouTube(w, r, name)
+		s.submitYouTube(w, r, t, name)
 	case "upload":
-		s.submitUpload(w, r, name)
+		s.submitUpload(w, r, t, name)
 	default:
 		writeErr(w, http.StatusBadRequest, "unknown submission type")
 	}
 }
 
-func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, name string) {
+func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, t *tenant.Tenant, name string) {
 	raw := strings.TrimSpace(r.FormValue("url"))
 	id, startFromURL, ok := queue.ParseYouTube(raw)
 	if !ok {
@@ -66,7 +75,7 @@ func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, name stri
 		StartSeconds:    start,
 		DurationSeconds: duration,
 	}
-	created := s.mgr.Submit(item)
+	created := t.Queue.Submit(item)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":     created.ID,
 		"title":  created.Title,
@@ -74,7 +83,7 @@ func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, name stri
 	})
 }
 
-func (s *Server) submitUpload(w http.ResponseWriter, r *http.Request, name string) {
+func (s *Server) submitUpload(w http.ResponseWriter, r *http.Request, t *tenant.Tenant, name string) {
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "no file provided")
@@ -128,7 +137,7 @@ func (s *Server) submitUpload(w http.ResponseWriter, r *http.Request, name strin
 		MediaURL:        "/media/" + storedName,
 		DurationSeconds: duration,
 	}
-	created := s.mgr.Submit(item)
+	created := t.Queue.Submit(item)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":     created.ID,
 		"title":  created.Title,

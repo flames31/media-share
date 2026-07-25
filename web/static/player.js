@@ -1,4 +1,5 @@
 (function () {
+  var playerKey = window.__PLAYER_KEY__ || "";
   var stage = document.getElementById("stage");
   var idle = document.getElementById("idle");
   var overlay = document.getElementById("overlay");
@@ -29,7 +30,7 @@
   // --- WebSocket ---
   function connect() {
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    var ws = new WebSocket(proto + "//" + location.host + "/ws?role=player");
+    var ws = new WebSocket(proto + "//" + location.host + "/ws?role=player&key=" + encodeURIComponent(playerKey));
     ws.onmessage = function (ev) {
       var msg;
       try { msg = JSON.parse(ev.data); } catch (e) { return; }
@@ -186,7 +187,7 @@
     fetch("/api/player/ended", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: id }),
+      body: JSON.stringify({ key: playerKey, id: id }),
     }).catch(function () {});
     // The server will broadcast a new state; UI updates from applyState.
   }

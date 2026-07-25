@@ -18,7 +18,14 @@
   </header>
 
   <div class="wrap">
-    <div class="card">
+    <!-- Shown while media share is closed or the link is invalid/expired. -->
+    <div class="card hidden" id="closedCard" style="text-align:center">
+      <div style="font-size:44px">🔒</div>
+      <h2 style="justify-content:center">Media share is closed</h2>
+      <p class="hint" id="closedMsg">The streamer hasn't opened submissions right now. Check back when they share an invite link.</p>
+    </div>
+
+    <div class="card hidden" id="formCard">
       <h2>Submit a clip</h2>
 
       <div class="segmented" id="typeToggle">
@@ -28,6 +35,7 @@
 
       <form id="submitForm" autocomplete="off">
         <input type="hidden" name="type" id="fieldType" value="youtube">
+        <input type="hidden" name="session" id="fieldSession" value="{{.SessionToken}}">
 
         <!-- YouTube fields -->
         <div id="youtubeFields">
@@ -72,6 +80,7 @@
     </div>
   </div>
 
+  <script>window.__SESSION_TOKEN__ = "{{.SessionToken}}";</script>
   <script src="/static/submit.js"></script>
 </body>
 </html>
