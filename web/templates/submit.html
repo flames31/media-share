@@ -20,7 +20,39 @@
       <p class="hint" id="closedMsg">The streamer hasn't opened submissions right now. Check back when they share an invite link.</p>
     </div>
 
+    <!-- Shown when the session is open but the viewer isn't logged in with Twitch. -->
+    <div class="card hidden" id="loginCard" style="text-align:center">
+      <div style="font-size:44px">🎮</div>
+      <h2 style="justify-content:center">Log in to submit</h2>
+      <p class="hint">Submissions are tied to your Twitch account so your cheered bits become credits you can spend here.</p>
+      <div style="margin-top:16px">
+        {{if .OAuthEnabled}}
+        <a class="btn primary" id="loginBtn" href="/viewer/auth/start">Log in with Twitch</a>
+        {{end}}
+        {{if .DevLogin}}
+        <form method="POST" action="/viewer/dev/login" style="display:inline">
+          <input type="hidden" name="s" value="{{.SessionToken}}">
+          <button type="submit" class="btn ghost">Dev viewer login</button>
+        </form>
+        {{end}}
+      </div>
+    </div>
+
     <div class="card hidden" id="formCard">
+      <!-- Viewer identity + per-channel credit balance. -->
+      <div class="viewer-bar" id="viewerBar">
+        <span>Submitting as <strong id="viewerName">{{.ViewerName}}</strong></span>
+        {{if .CreditsEnabled}}<span class="badge" id="balanceBadge">— credits</span>{{end}}
+        {{if and .DevLogin .CreditsEnabled}}
+        <button type="button" class="btn green" id="devCreditBtn" style="padding:6px 12px" title="DEV_LOGIN only — grants test credits">+ Add test credits</button>
+        {{end}}
+        <span class="spacer"></span>
+        <form method="POST" action="/viewer/logout" style="margin:0">
+          <input type="hidden" name="s" value="{{.SessionToken}}">
+          <button type="submit" class="btn ghost" style="padding:6px 12px">Sign out</button>
+        </form>
+      </div>
+
       <h2>Submit a clip</h2>
 
       <div class="segmented" id="typeToggle">
@@ -56,16 +88,14 @@
           <input type="file" id="file" name="file" accept="{{.AcceptAttr}}">
           <div class="hint">Allowed: {{.AllowedExtDisplay}} · Max {{.MaxUploadMB}} MB.</div>
 
-          <label for="durationUp">Play length (seconds, 0 = whole file)</label>
+          <label for="durationUp">Play length (seconds{{if not .CreditsEnabled}}, 0 = whole file{{end}})</label>
           <input type="number" id="durationUp" name="durationUpload" min="0" value="0">
         </div>
 
-        <label for="name">Your name (optional)</label>
-        <input type="text" id="name" name="name" placeholder="Shown to the streamer" maxlength="40">
-
-        <label for="donation">Donation amount ($)</label>
-        <input type="number" id="donation" name="donation" placeholder="Coming soon" disabled>
-        <div class="hint">Payments are coming later — for now, set the play length directly above.</div>
+        {{if .CreditsEnabled}}
+        <div class="cost-line" id="costLine">Cost: <strong id="costValue">—</strong> credits</div>
+        <div class="hint">Credits come from cheering bits in this channel: 1 bit = 1 credit, and a clip costs {{.CreditsPerSecond}} credits per second of play length.</div>
+        {{end}}
 
         <div style="margin-top:20px">
           <button type="submit" class="btn primary" id="submitBtn">Add to queue</button>
@@ -75,7 +105,12 @@
     </div>
   </div>
 
-  <script>window.__SESSION_TOKEN__ = "{{.SessionToken}}";</script>
+  <script>
+    window.__SESSION_TOKEN__ = "{{.SessionToken}}";
+    window.__LOGGED_IN__ = {{if .LoggedIn}}true{{else}}false{{end}};
+    window.__CREDITS_ENABLED__ = {{if .CreditsEnabled}}true{{else}}false{{end}};
+    window.__CREDITS_PER_SECOND__ = {{.CreditsPerSecond}};
+  </script>
   <script src="/static/submit.js"></script>
 </body>
 </html>

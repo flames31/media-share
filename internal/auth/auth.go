@@ -17,15 +17,35 @@ import (
 )
 
 const (
-	cookieName = "sid"
-	stateTTL   = 10 * time.Minute
-	sessionTTL = 30 * 24 * time.Hour
+	cookieName       = "sid"  // streamer / moderator login cookie
+	viewerCookieName = "vsid" // viewer login cookie (separate identity)
+	stateTTL         = 10 * time.Minute
+	sessionTTL       = 30 * 24 * time.Hour
+)
+
+// OAuth login kinds carried in the state so the shared /auth/twitch/callback can
+// tell a streamer login apart from a viewer login (both use one redirect URI).
+const (
+	KindOwner  = "owner"
+	KindViewer = "viewer"
 )
 
 // ErrUnauthenticated is returned when a request has no valid login session.
 var ErrUnauthenticated = errors.New("unauthenticated")
 
-type stateEntry struct{ expires time.Time }
+// stateEntry records a pending OAuth handshake: when it expires, whether it's an
+// owner or viewer login, and (for viewers) the submit token to return them to.
+type stateEntry struct {
+	expires  time.Time
+	kind     string
+	returnTo string
+}
+
+// StateInfo is the consumed state's login intent, returned to the callback handler.
+type StateInfo struct {
+	Kind     string
+	ReturnTo string
+}
 
 // Authenticator ties the OAuth client, account store, and login-session cookies
 // together.
@@ -43,24 +63,47 @@ func New(o *oauth.Client, s *store.Store, secure bool) *Authenticator {
 	return &Authenticator{oauth: o, store: s, secure: secure, states: map[string]stateEntry{}}
 }
 
-// AuthorizeURL creates a single-use state and returns the Twitch consent URL for
-// identity login (no scopes needed for basic identity).
+// AuthorizeURL creates a single-use state for a streamer login and returns the
+// Twitch consent URL (no scopes needed for basic identity).
 func (a *Authenticator) AuthorizeURL() string {
+	return a.authorizeURL(KindOwner, "")
+}
+
+// ViewerAuthorizeURL creates a single-use state for a viewer login and returns the
+// Twitch consent URL. returnToken is the submit session token the viewer should be
+// dropped back onto after login.
+func (a *Authenticator) ViewerAuthorizeURL(returnToken string) string {
+	return a.authorizeURL(KindViewer, returnToken)
+}
+
+func (a *Authenticator) authorizeURL(kind, returnTo string) string {
 	state := randHex(24)
 	a.mu.Lock()
 	a.pruneLocked()
-	a.states[state] = stateEntry{expires: time.Now().Add(stateTTL)}
+	a.states[state] = stateEntry{expires: time.Now().Add(stateTTL), kind: kind, returnTo: returnTo}
 	a.mu.Unlock()
 	return a.oauth.AuthorizeURL(state)
 }
 
-// Login completes the OAuth callback: it validates state, exchanges the code for
-// the Twitch identity, upserts the account, opens a login session, and writes the
-// cookie. Returns the streamer.
-func (a *Authenticator) Login(ctx context.Context, w http.ResponseWriter, code, state string) (*store.Streamer, error) {
-	if !a.consumeState(state) {
-		return nil, errors.New("invalid or expired login state")
+// ConsumeState validates and consumes a single-use OAuth state, returning its
+// login intent. The callback handler calls this once, then dispatches to Login or
+// LoginViewer based on the kind.
+func (a *Authenticator) ConsumeState(state string) (StateInfo, bool) {
+	e, ok := a.consumeStateEntry(state)
+	if !ok {
+		return StateInfo{}, false
 	}
+	kind := e.kind
+	if kind == "" {
+		kind = KindOwner // states minted before kinds existed default to owner
+	}
+	return StateInfo{Kind: kind, ReturnTo: e.returnTo}, true
+}
+
+// Login exchanges the code for the Twitch identity, upserts the streamer account,
+// opens a login session, and writes the cookie. The caller must have already
+// consumed the OAuth state (see ConsumeState). Returns the streamer.
+func (a *Authenticator) Login(ctx context.Context, w http.ResponseWriter, code string) (*store.Streamer, error) {
 	u, err := a.oauth.ExchangeCodeForUser(ctx, code)
 	if err != nil {
 		return nil, err
@@ -75,6 +118,26 @@ func (a *Authenticator) Login(ctx context.Context, w http.ResponseWriter, code, 
 	}
 	a.setCookie(w, sid)
 	return streamer, nil
+}
+
+// LoginViewer exchanges the code for the Twitch identity, upserts the viewer,
+// opens a viewer session, and writes the vsid cookie. The caller must have already
+// consumed the OAuth state.
+func (a *Authenticator) LoginViewer(ctx context.Context, w http.ResponseWriter, code string) (*store.Viewer, error) {
+	u, err := a.oauth.ExchangeCodeForUser(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	viewer, err := a.store.UpsertViewer(u.ID, u.Login, u.DisplayName)
+	if err != nil {
+		return nil, err
+	}
+	vsid, err := a.store.CreateViewerSession(viewer.ID, sessionTTL)
+	if err != nil {
+		return nil, err
+	}
+	a.setViewerCookie(w, vsid)
+	return viewer, nil
 }
 
 // LoginModerator opens a moderator login session for the given tenant owner and
@@ -106,12 +169,36 @@ func (a *Authenticator) DevLogin(w http.ResponseWriter) (*store.Streamer, error)
 	return streamer, nil
 }
 
-// Logout clears the current login session and cookie.
+// DevLoginViewer logs the caller in as a fixed local dev viewer, bypassing Twitch.
+// Only reachable when DEV_LOGIN is enabled (enforced by the caller), so spending
+// can be tested without a real Twitch login.
+func (a *Authenticator) DevLoginViewer(w http.ResponseWriter) (*store.Viewer, error) {
+	viewer, err := a.store.UpsertViewer("devviewer", "devviewer", "Dev Viewer")
+	if err != nil {
+		return nil, err
+	}
+	vsid, err := a.store.CreateViewerSession(viewer.ID, sessionTTL)
+	if err != nil {
+		return nil, err
+	}
+	a.setViewerCookie(w, vsid)
+	return viewer, nil
+}
+
+// Logout clears the current streamer login session and cookie.
 func (a *Authenticator) Logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(cookieName); err == nil {
 		_ = a.store.DeleteAuthSession(c.Value)
 	}
 	a.clearCookie(w)
+}
+
+// LogoutViewer clears the current viewer login session and cookie.
+func (a *Authenticator) LogoutViewer(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(viewerCookieName); err == nil {
+		_ = a.store.DeleteViewerSession(c.Value)
+	}
+	a.clearViewerCookie(w)
 }
 
 // Authenticate resolves the streamer (tenant owner) and the caller's role for a
@@ -131,10 +218,28 @@ func (a *Authenticator) Authenticate(r *http.Request) (*store.Streamer, string, 
 	return st, role, nil
 }
 
+// AuthenticateViewer resolves the viewer for a request from the vsid cookie, or
+// ErrUnauthenticated.
+func (a *Authenticator) AuthenticateViewer(r *http.Request) (*store.Viewer, error) {
+	c, err := r.Cookie(viewerCookieName)
+	if err != nil || c.Value == "" {
+		return nil, ErrUnauthenticated
+	}
+	v, err := a.store.GetValidViewerSession(c.Value)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, ErrUnauthenticated
+	}
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
 // --- request context ---
 
 type ctxKey struct{}
 type roleKey struct{}
+type viewerKey struct{}
 
 // WithStreamer returns a copy of ctx carrying the streamer (the tenant owner).
 func WithStreamer(ctx context.Context, s *store.Streamer) context.Context {
@@ -156,6 +261,36 @@ func WithRole(ctx context.Context, role string) context.Context {
 func RoleFrom(ctx context.Context) string {
 	role, _ := ctx.Value(roleKey{}).(string)
 	return role
+}
+
+// WithViewer returns a copy of ctx carrying the viewer.
+func WithViewer(ctx context.Context, v *store.Viewer) context.Context {
+	return context.WithValue(ctx, viewerKey{}, v)
+}
+
+// ViewerFrom extracts the viewer placed by RequireViewer.
+func ViewerFrom(ctx context.Context) (*store.Viewer, bool) {
+	v, ok := ctx.Value(viewerKey{}).(*store.Viewer)
+	return v, ok
+}
+
+// RequireViewer is middleware for viewer-facing JSON APIs: it 401s requests
+// without a valid viewer session and otherwise injects the viewer into context.
+// It applies the same same-origin (CSRF) guard on unsafe methods as
+// RequireStreamer.
+func (a *Authenticator) RequireViewer(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !sameSite(r) {
+			http.Error(w, `{"error":"cross-site request blocked"}`, http.StatusForbidden)
+			return
+		}
+		v, err := a.AuthenticateViewer(r)
+		if err != nil {
+			http.Error(w, `{"error":"login required"}`, http.StatusUnauthorized)
+			return
+		}
+		next(w, r.WithContext(WithViewer(r.Context(), v)))
+	}
 }
 
 // RequireStreamer is middleware for JSON APIs: it 401s unauthenticated requests
@@ -218,17 +353,43 @@ func (a *Authenticator) clearCookie(w http.ResponseWriter) {
 	})
 }
 
+func (a *Authenticator) setViewerCookie(w http.ResponseWriter, vsid string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     viewerCookieName,
+		Value:    vsid,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   a.secure,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(sessionTTL),
+		MaxAge:   int(sessionTTL / time.Second),
+	})
+}
+
+func (a *Authenticator) clearViewerCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     viewerCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   a.secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
 // --- state ---
 
-func (a *Authenticator) consumeState(state string) bool {
+func (a *Authenticator) consumeStateEntry(state string) (stateEntry, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.pruneLocked()
-	if _, ok := a.states[state]; !ok {
-		return false
+	e, ok := a.states[state]
+	if !ok {
+		return stateEntry{}, false
 	}
 	delete(a.states, state)
-	return true
+	return e, true
 }
 
 func (a *Authenticator) pruneLocked() {

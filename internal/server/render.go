@@ -83,11 +83,22 @@ func (s *Server) handleSubmitPage(w http.ResponseWriter, r *http.Request) {
 	if token == "" {
 		token = strings.TrimSpace(r.URL.Query().Get("s"))
 	}
+	// Viewer login state so the page can show "Log in with Twitch" vs the form.
+	var viewerName string
+	if v, err := s.auth.AuthenticateViewer(r); err == nil {
+		viewerName = v.DisplayName
+	}
 	s.render(w, "submit", map[string]any{
 		"AcceptAttr":        accept,
 		"AllowedExtDisplay": strings.ToUpper(display),
 		"MaxUploadMB":       s.cfg.MaxUploadMB,
 		"SessionToken":      token,
+		"OAuthEnabled":      s.cfg.OAuthEnabled(),
+		"DevLogin":          s.cfg.DevLogin,
+		"CreditsEnabled":    s.cfg.CreditsEnabled,
+		"CreditsPerSecond":  s.cfg.CreditsPerSecond,
+		"ViewerName":        viewerName,
+		"LoggedIn":          viewerName != "",
 	})
 }
 

@@ -10,6 +10,11 @@ All routes are registered in `internal/server/server.go` (`routes()`), using Go
 - **token** — requires a valid, currently-open invite token.
 - **key** — requires a valid `player_key`.
 - **mod-link** — requires a valid (unrevoked) moderator link token.
+- **viewer** — requires a valid `vsid` viewer login cookie (`RequireViewer`).
+  A viewer identity is separate from a streamer's; unsafe methods also pass the
+  `Sec-Fetch-Site` same-origin guard.
+- **hmac** — a public route authenticated by the Twitch EventSub signature
+  (`TWITCH_EVENTSUB_SECRET`), not a cookie.
 
 Cookie sessions carry a **role** (`owner` or `moderator`). `RequireStreamer`
 accepts both; `RequireOwner` accepts only owners. A moderator's session
@@ -38,11 +43,46 @@ throughout.
 | POST | `/mod/{token}` | mod-link | `handleModClaim` | Exchanges a valid moderator link for a moderator session scoped to the link owner's tenant → 303 `/admin`. 404 if revoked. |
 | POST | `/logout` | cookie | `handleLogout` | Deletes the session row + clears cookie. |
 
+## Viewer auth & credits
+
+Viewers log in with Twitch (a separate identity from streamers) so their cheered
+bits can be credited and spent. The Twitch redirect URI is **shared** with streamer
+login; the single-use OAuth `state` carries the login *kind* (`owner`/`viewer`) and,
+for viewers, the submit token to return to.
+
+| Method | Path | Auth | Handler | Notes |
+| --- | --- | --- | --- | --- |
+| GET | `/viewer/auth/start` | public | `handleViewerAuthStart` | `?s=<token>` → 303 to Twitch consent (viewer state). |
+| POST | `/viewer/logout` | public | `handleViewerLogout` | Clears `vsid`, 303 back to the submit page. |
+| POST | `/viewer/dev/login` | public\* | `handleViewerDevLogin` | \*404 unless `DEV_LOGIN=1`. Logs in as a fixed `devviewer`. |
+| GET | `/api/viewer/me` | viewer | `handleViewerMe` | `?s=<token>` → `{displayName, login, balance, creditsEnabled, creditsPerSecond}`. Balance is per-channel (resolved from the token). |
+| POST | `/api/dev/credit` | viewer\* | `handleDevCredit` | \*404 unless `DEV_LOGIN=1`. JSON `{s?, streamerId?, amount?}` — channel resolved from the submit token `s` (or explicit `streamerId`), `amount` defaults to 1000 — grants credits to the current dev viewer → `{balance, granted}`. Backs the one-click **+ Add test credits** button on the submit page. |
+| POST | `/api/webhooks/twitch/eventsub` | hmac | `handleEventSub` | Twitch EventSub receiver (see below). |
+
+### EventSub webhook (`/api/webhooks/twitch/eventsub`)
+
+Authenticated by HMAC, **not** a cookie. Every request:
+
+1. Raw body is read verbatim and the signature verified: `sha256=` +
+   `HMAC_SHA256(secret, messageId + timestamp + body)`, constant-time
+   (`twitch.VerifyEventSubSignature`). Bad signature → **403**. Timestamps older
+   than 10 min → **403** (replay guard).
+2. Dispatch on `Twitch-Eventsub-Message-Type`:
+   - `webhook_callback_verification` → **200** `text/plain` echoing `challenge`
+     (activates an out-of-band subscription).
+   - `revocation` → logged, **200**.
+   - `notification` → `channel.cheer` / `channel.bits.use` parsed; a non-anonymous
+     cheer credits `bits` (1 bit = 1 credit) to `(user_id, broadcaster_user_id)` via
+     `store.CreditBits`. Dedup by message id makes retries idempotent. Always **200**.
+
+Subscriptions are created **out-of-band** (Twitch CLI / dashboard) with the same
+`TWITCH_EVENTSUB_SECRET` and callback `<BaseURL>/api/webhooks/twitch/eventsub`.
+
 ## Public API (tenant resolved from token / key)
 
 | Method | Path | Auth | Handler | Request → Response |
 | --- | --- | --- | --- | --- |
-| POST | `/api/submit` | token | `handleSubmit` | multipart `{session, type=youtube\|upload, url\|file, start, duration, name}` → `{id,title,status}` or `4xx {error}`. Body capped at `MaxUploadBytes + 1MB`. |
+| POST | `/api/submit` | token + viewer | `handleSubmit` | multipart `{session, type=youtube\|upload, url\|file, start, duration}` → `{id,title,status}`. `SubmitterName` comes from the viewer's Twitch identity (no `name` field). When credits are on, deducts `duration × CreditsPerSecond` atomically **before** enqueue; **402** `{error, cost, balance}` if short. Body capped at `MaxUploadBytes + 1MB`. |
 | GET | `/api/session/check` | public | `handleSessionCheck` | `?s=<token>` → `{valid: bool}`. Reveals nothing about the streamer. |
 | POST | `/api/player/ended` | key | `handlePlayerEnded` | JSON `{key, id}` → advances that tenant's queue. 404 on bad key. |
 | GET | `/ws` | cookie or key | `handleWS` | `?role=admin` (cookie→room) or `?role=player&key=` (key→room). Upgrades to WebSocket. |

@@ -12,13 +12,27 @@ import (
 
 	"github.com/google/uuid"
 
+	"media-share/internal/auth"
 	"media-share/internal/queue"
+	"media-share/internal/store"
 	"media-share/internal/tenant"
 )
 
-// handleSubmit accepts a multipart submission (YouTube link or file upload) and
-// adds it to the queue as a pending item (or approved, if bypass is on).
+// minBillableSeconds is the shortest play length a paid clip can be charged for.
+// It doubles as the enforced playback cap, so the credits paid always match the
+// time played (a viewer can't pay for 10s and play a full-length clip).
+const minBillableSeconds = 10
+
+// handleSubmit accepts a multipart submission (YouTube link or file upload) from a
+// logged-in viewer and adds it to the queue, charging the viewer's per-channel
+// credits first. It runs behind RequireViewer, so the viewer identity is trusted.
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
+	viewer, ok := auth.ViewerFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "log in to submit")
+		return
+	}
+
 	// Cap the request body; add a little headroom over the file cap for form fields.
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadBytes()+1<<20)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -34,22 +48,51 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimSpace(r.FormValue("name"))
-	if len(name) > 40 {
-		name = name[:40]
-	}
-
 	switch r.FormValue("type") {
 	case "youtube":
-		s.submitYouTube(w, r, t, name)
+		s.submitYouTube(w, r, t, viewer)
 	case "upload":
-		s.submitUpload(w, r, t, name)
+		s.submitUpload(w, r, t, viewer)
 	default:
 		writeErr(w, http.StatusBadRequest, "unknown submission type")
 	}
 }
 
-func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, t *tenant.Tenant, name string) {
+// chargeSubmit deducts the credit cost for a clip of the given play length from the
+// viewer's balance in this channel, before the clip is queued. It returns false
+// (after writing a 402 with the cost and current balance) when the viewer can't
+// afford it. When credits are disabled it is a no-op that returns true.
+func (s *Server) chargeSubmit(w http.ResponseWriter, v *store.Viewer, streamerID string, durationSeconds int, ref string) bool {
+	if !s.cfg.CreditsEnabled {
+		return true
+	}
+	cost := int64(durationSeconds) * s.cfg.CreditsPerSecond
+	bal, ok, err := s.store.SpendCredits(v.ID, streamerID, cost, ref)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not process credits")
+		return false
+	}
+	if !ok {
+		writeJSON(w, http.StatusPaymentRequired, map[string]any{
+			"error":   "You don't have enough credits — cheer bits in this channel to top up.",
+			"cost":    cost,
+			"balance": bal,
+		})
+		return false
+	}
+	return true
+}
+
+// billableDuration clamps a requested play length so a paid clip always has a
+// bounded, chargeable length (no "whole file" free-for-all under credits).
+func (s *Server) billableDuration(duration int) int {
+	if s.cfg.CreditsEnabled && duration < minBillableSeconds {
+		return minBillableSeconds
+	}
+	return duration
+}
+
+func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, t *tenant.Tenant, viewer *store.Viewer) {
 	raw := strings.TrimSpace(r.FormValue("url"))
 	id, startFromURL, ok := queue.ParseYouTube(raw)
 	if !ok {
@@ -65,15 +108,20 @@ func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, t *tenant
 		}
 	}
 
-	duration := clampDuration(r.FormValue("duration"), 10)
+	duration := s.billableDuration(clampDuration(r.FormValue("duration"), minBillableSeconds))
 
 	item := &queue.Item{
+		ID:              uuid.NewString(),
 		Type:            queue.TypeYouTube,
 		Title:           "YouTube · " + id,
-		SubmitterName:   name,
+		SubmitterName:   viewer.DisplayName,
 		YouTubeID:       id,
 		StartSeconds:    start,
 		DurationSeconds: duration,
+	}
+	// Deduct credits atomically BEFORE queuing; only enqueue on success.
+	if !s.chargeSubmit(w, viewer, t.StreamerID, duration, item.ID) {
+		return
 	}
 	created := t.Queue.Submit(item)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -83,7 +131,7 @@ func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, t *tenant
 	})
 }
 
-func (s *Server) submitUpload(w http.ResponseWriter, r *http.Request, t *tenant.Tenant, name string) {
+func (s *Server) submitUpload(w http.ResponseWriter, r *http.Request, t *tenant.Tenant, viewer *store.Viewer) {
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "no file provided")
@@ -127,15 +175,21 @@ func (s *Server) submitUpload(w http.ResponseWriter, r *http.Request, t *tenant.
 		return
 	}
 
-	duration := clampDuration(r.FormValue("duration"), 0) // 0 = whole file
+	// 0 means "whole file"; under credits we clamp up so the clip is billable.
+	duration := s.billableDuration(clampDuration(r.FormValue("duration"), 0))
 
-	title := origTitle(header.Filename)
 	item := &queue.Item{
+		ID:              uuid.NewString(),
 		Type:            queue.TypeUpload,
-		Title:           title,
-		SubmitterName:   name,
+		Title:           origTitle(header.Filename),
+		SubmitterName:   viewer.DisplayName,
 		MediaURL:        "/media/" + storedName,
 		DurationSeconds: duration,
+	}
+	// Deduct credits atomically BEFORE queuing; drop the saved file if they can't pay.
+	if !s.chargeSubmit(w, viewer, t.StreamerID, duration, item.ID) {
+		_ = os.Remove(dstPath)
+		return
 	}
 	created := t.Queue.Submit(item)
 	writeJSON(w, http.StatusOK, map[string]any{

@@ -104,32 +104,74 @@ Admin console        server (handlers_session)      tenant.Tenant        session
 - **Stop** and **Regenerate** drop the old token from the index, so previously
   shared `/s/<token>` links stop resolving immediately.
 
-## 4. Viewer submission
+## 4. Viewer submission (paid, logged-in)
+
+Viewers now **log in with Twitch** (a separate identity from streamers) and
+**spend credits** to queue clips. Viewer login reuses the streamer OAuth client and
+the shared `/auth/twitch/callback`; the single-use `state` carries `kind='viewer'`
+and the submit token to return to. `handleAuthCallback` dispatches on the kind.
 
 ```
-Submit page (/s/<token>)     server (handlers_submit)     registry        queue.Manager       hub
-   │ GET /s/<token> ─────────► render submit.html (token injected as SessionToken)
-   │ (optional) GET /api/session/check?s=<token> ─► reg.ResolveSession → {valid: bool}   (UX only)
-   │ POST /api/submit (multipart: session, type, url|file, start, duration, name)
-   │────────────────────────► handleSubmit
+Submit page (/s/<token>)     server                         auth/store              registry / queue
+   │ GET /s/<token> ─────────► handleSubmitPage: AuthenticateViewer → LoggedIn?; render submit.html
+   │  (not logged in) click "Log in with Twitch"
+   │ GET /viewer/auth/start?s=<token> ─► ViewerAuthorizeURL(token) → 302 Twitch consent
+   │◄── /auth/twitch/callback?code&state ─► ConsumeState→kind=viewer → LoginViewer → Set-Cookie vsid; 303 /s/<token>
+   │ GET /api/viewer/me?s=<token> (RequireViewer) ─► {displayName, balance, creditsPerSecond}
+   │ POST /api/submit (RequireViewer; multipart: session, type, url|file, start, duration)
+   │────────────────────────► handleSubmit  (viewer from ctx; SubmitterName = viewer.DisplayName)
    │                           reg.ResolveSession(token) ──► tenant OR 403 "closed"
-   │                           submitYouTube / submitUpload
-   │                             parse/validate; save file to MEDIA_DIR if upload
-   │                             tenant.Queue.Submit(item) ─────────────► append (pending|approved)
-   │                                                                       startIfIdleLocked()
-   │                                                                       broadcast Snapshot ──► BroadcastTo(room,"state")
+   │                           cost = duration × CreditsPerSecond
+   │                           store.SpendCredits(viewer,streamer,cost,itemID)
+   │                              ├─ ok=false ─► 402 {error, cost, balance}   (nothing queued)
+   │                              └─ ok=true  ─► tenant.Queue.Submit(item) → broadcast Snapshot
    │◄──── {id,title,status} (JSON) ──────────────────────────────────────
 ```
 
-- The submit handler **re-resolves the token server-side** — the authoritative
-  gate. A closed/stopped session ⇒ `403 "Media share is closed right now."`
-- YouTube: `queue.ParseYouTube` extracts the video id + optional start; an
-  explicit `start` field overrides the URL's. `duration` defaults to 10s,
-  clamped to ≤ 3600s.
-- Upload: size- and extension-checked against config; stored under `MEDIA_DIR`
-  as `<uuid><ext>`; `MediaURL` is `/media/<file>`. `duration` defaults to 0
-  ("play whole file").
+- `POST /api/submit` runs behind **`RequireViewer`** → `401` without a `vsid`. The
+  `name` field is gone; the submitter name is the viewer's trusted Twitch name.
+- **Deduct-before-enqueue**: credits are spent atomically *first*; the item is only
+  queued on success. Insufficient funds ⇒ `402` and nothing is queued (an already
+  uploaded file is deleted). The conditional `UPDATE` keeps balances ≥ 0.
+- The submit handler still **re-resolves the token server-side** (authoritative
+  gate); a closed session ⇒ `403 "Media share is closed right now."`
+- **Pricing:** `duration × CREDITS_PER_SECOND`. Under credits the duration is
+  clamped up to `minBillableSeconds` (10s), so what's charged always equals what
+  plays (no "whole file" for the price of 10s). YouTube start/duration parsing is
+  unchanged. With `CREDITS_ENABLED=false` (or in dev) the spend is skipped.
 - With **bypass** on, `Submit` puts the item straight into the approved queue.
+
+## 4b. Cheer → credit (Twitch EventSub webhook)
+
+Bits cheered in a streamer's channel become that viewer's per-channel credits.
+Subscriptions are created **out-of-band**; the server only receives notifications.
+
+```
+Twitch ──► POST /api/webhooks/twitch/eventsub          server (handlers_eventsub)      store
+   │  headers: Message-Id, -Timestamp, -Signature, -Type
+   │────────────────────────────────────────────────► read RAW body
+   │                                                    twitch.VerifyEventSubSignature (HMAC, const-time) ─► 403 on mismatch
+   │                                                    EventSubTimestampFresh (≤10m) ─────────────────────► 403 if stale
+   │                                                    switch Message-Type:
+   │                                                      verification ─► 200 text/plain echo `challenge`
+   │                                                      revocation   ─► log, 200
+   │                                                      notification ─► parse channel.cheer / bits.use
+   │                                                          store.CreditBits(msgId, user, broadcaster, bits)
+   │                                                             INSERT bits_events (dup ⇒ no-op) + credits += bits + ledger
+   │◄──── 200 (always, for a handled notification) ───────────────────────
+```
+
+- **Authenticated by HMAC**, not a cookie: `sha256=HMAC(secret, id+timestamp+body)`
+  over the raw bytes. Bad signature or stale timestamp ⇒ `403`.
+- **Idempotent:** the message id is inserted in the *same transaction* as the
+  credit, so a Twitch retry / replay credits exactly once.
+- **Anonymous cheers** (no `user_id`) are acknowledged but not credited — there's no
+  balance to attribute them to.
+- **Testing without bits:** with `DEV_LOGIN=1`, the submit page shows a one-click
+  **+ Add test credits** button (backed by `POST /api/dev/credit`, which resolves
+  the channel from the submit token and defaults the amount). The Twitch CLI can
+  also POST a properly-signed cheer to the webhook to exercise verify + dedup +
+  credit for real.
 
 ## 5. Moderation (streamer)
 

@@ -165,6 +165,127 @@ func TestModeratorLinkLifecycle(t *testing.T) {
 	}
 }
 
+func TestViewerSessionLifecycle(t *testing.T) {
+	s := newTestStore(t)
+
+	v, err := s.UpsertViewer("v1", "vicky", "Vicky")
+	if err != nil || v.ID != "v1" {
+		t.Fatalf("upsert viewer: %v, %v", v, err)
+	}
+
+	vsid, err := s.CreateViewerSession("v1", time.Hour)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	got, err := s.GetValidViewerSession(vsid)
+	if err != nil || got.ID != "v1" {
+		t.Fatalf("valid session = %v, %v", got, err)
+	}
+
+	if _, err := s.GetValidViewerSession(""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("empty vsid err = %v", err)
+	}
+	// Expired session is rejected.
+	expired, _ := s.CreateViewerSession("v1", -time.Minute)
+	if _, err := s.GetValidViewerSession(expired); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expired vsid err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.DeleteViewerSession(vsid); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.GetValidViewerSession(vsid); !errors.Is(err, ErrNotFound) {
+		t.Errorf("after delete err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCreditBitsCreditsOnceAndDedups(t *testing.T) {
+	s := newTestStore(t)
+	s.UpsertStreamer("A", "streamera", "StreamerA")
+
+	// A cheer for a viewer who has never logged in still credits (viewer upserted).
+	credited, err := s.CreditBits("msg-1", "v1", "vicky", "Vicky", "A", 100)
+	if err != nil || !credited {
+		t.Fatalf("first credit = %v, %v; want true, nil", credited, err)
+	}
+	if bal, _ := s.Balance("v1", "A"); bal != 100 {
+		t.Fatalf("balance = %d, want 100", bal)
+	}
+	if v, err := s.GetViewer("v1"); err != nil || v.DisplayName != "Vicky" {
+		t.Fatalf("viewer not upserted from event: %v, %v", v, err)
+	}
+
+	// Replaying the same message id must not credit again.
+	credited, err = s.CreditBits("msg-1", "v1", "vicky", "Vicky", "A", 100)
+	if err != nil || credited {
+		t.Fatalf("replay credit = %v, %v; want false, nil", credited, err)
+	}
+	if bal, _ := s.Balance("v1", "A"); bal != 100 {
+		t.Fatalf("balance after replay = %d, want 100", bal)
+	}
+
+	// A distinct message id stacks onto the balance.
+	if _, err := s.CreditBits("msg-2", "v1", "vicky", "Vicky", "A", 50); err != nil {
+		t.Fatalf("second credit: %v", err)
+	}
+	if bal, _ := s.Balance("v1", "A"); bal != 150 {
+		t.Fatalf("balance = %d, want 150", bal)
+	}
+}
+
+func TestCreditBalancesArePerChannel(t *testing.T) {
+	s := newTestStore(t)
+	s.UpsertStreamer("A", "streamera", "StreamerA")
+	s.UpsertStreamer("B", "streamerb", "StreamerB")
+
+	if _, err := s.CreditBits("m1", "v1", "vicky", "Vicky", "A", 200); err != nil {
+		t.Fatalf("credit: %v", err)
+	}
+	if bal, _ := s.Balance("v1", "A"); bal != 200 {
+		t.Errorf("A balance = %d, want 200", bal)
+	}
+	if bal, _ := s.Balance("v1", "B"); bal != 0 {
+		t.Errorf("B balance = %d, want 0 (credits are per-channel)", bal)
+	}
+}
+
+func TestSpendCreditsAtomicAndNeverNegative(t *testing.T) {
+	s := newTestStore(t)
+	s.UpsertStreamer("A", "streamera", "StreamerA")
+	s.CreditBits("m1", "v1", "vicky", "Vicky", "A", 100)
+
+	// Spend within budget.
+	bal, ok, err := s.SpendCredits("v1", "A", 60, "item-1")
+	if err != nil || !ok || bal != 40 {
+		t.Fatalf("spend 60 = bal %d, ok %v, err %v; want 40, true, nil", bal, ok, err)
+	}
+
+	// Overspend is rejected; balance untouched, current balance reported back.
+	bal, ok, err = s.SpendCredits("v1", "A", 100, "item-2")
+	if err != nil || ok || bal != 40 {
+		t.Fatalf("overspend = bal %d, ok %v, err %v; want 40, false, nil", bal, ok, err)
+	}
+
+	// Spending in a channel with no balance row fails cleanly (reports 0).
+	bal, ok, _ = s.SpendCredits("v1", "B", 10, "item-3")
+	if ok || bal != 0 {
+		t.Fatalf("spend with no row = bal %d, ok %v; want 0, false", bal, ok)
+	}
+}
+
+func TestGrantCredits(t *testing.T) {
+	s := newTestStore(t)
+	s.UpsertStreamer("A", "streamera", "StreamerA")
+	s.UpsertViewer("v1", "vicky", "Vicky")
+
+	if err := s.GrantCredits("v1", "A", 500); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	if bal, _ := s.Balance("v1", "A"); bal != 500 {
+		t.Fatalf("balance = %d, want 500", bal)
+	}
+}
+
 func TestRevokeModeratorAccessKicksModsKeepsOwner(t *testing.T) {
 	s := newTestStore(t)
 	s.UpsertStreamer("owner1", "owen", "Owen")

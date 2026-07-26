@@ -34,7 +34,61 @@ CREATE TABLE moderator_links (
     created_at  INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX idx_moderator_links_streamer ON moderator_links(streamer_id);
+
+-- Viewers are Twitch users who submit clips. A viewer identity is SEPARATE from a
+-- streamer's: no console, just a login session (vsid) and per-channel credits.
+CREATE TABLE viewers (
+    id           TEXT PRIMARY KEY,   -- Twitch user id
+    login        TEXT NOT NULL,      -- Twitch login, lowercased
+    display_name TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL
+);
+CREATE TABLE viewer_sessions (
+    id         TEXT PRIMARY KEY,     -- opaque random hex; the vsid cookie value
+    viewer_id  TEXT NOT NULL REFERENCES viewers(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX idx_viewer_sessions_viewer ON viewer_sessions(viewer_id);
+
+-- Credits a viewer holds in ONE streamer's channel. Bits cheered to A are only
+-- spendable in A's queue, so the balance is keyed by the (viewer, streamer) pair.
+CREATE TABLE credit_balances (
+    viewer_id   TEXT NOT NULL REFERENCES viewers(id) ON DELETE CASCADE,
+    streamer_id TEXT NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
+    credits     INTEGER NOT NULL DEFAULT 0, -- never negative
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (viewer_id, streamer_id)
+);
+
+-- Every processed EventSub message id, so a redelivered/replayed cheer can never
+-- credit twice. Inserted in the SAME transaction as the credit.
+CREATE TABLE bits_events (
+    message_id  TEXT PRIMARY KEY,    -- Twitch-Eventsub-Message-Id
+    received_at INTEGER NOT NULL
+);
+
+-- Append-only audit trail of every balance change (earn or spend).
+CREATE TABLE credit_ledger (
+    id          TEXT PRIMARY KEY,
+    viewer_id   TEXT NOT NULL,
+    streamer_id TEXT NOT NULL,
+    delta       INTEGER NOT NULL,    -- + earn / - spend
+    reason      TEXT NOT NULL,       -- 'cheer' | 'submit' | 'dev_grant'
+    ref         TEXT,                -- message id or queue item id, when relevant
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX idx_credit_ledger_viewer ON credit_ledger(viewer_id, streamer_id);
 ```
+
+> **Credits are per-channel.** A viewer earns credits by cheering bits in a
+> streamer's channel (1 bit = 1 credit, credited only inside the HMAC-verified
+> EventSub webhook), and spends them queuing clips in *that* channel
+> (`duration × CREDITS_PER_SECOND`). Earning and spending both mutate the balance
+> **server-side only**: crediting is one transaction with the dedup row so replays
+> can't double-credit; spending is a single conditional `UPDATE … WHERE credits >=
+> cost` so a balance never goes negative even under concurrent submits.
 
 > **`auth_sessions.role` and moderators.** A session's `streamer_id` is always the
 > **tenant owner**. `role` distinguishes the owner from a delegated **moderator**
@@ -65,6 +119,24 @@ Store methods (all parameterized):
   sessions for that streamer (kick current mods; owner session untouched).
 
 Roles are `store.RoleOwner` / `store.RoleModerator`.
+
+Viewer & credit methods (all parameterized):
+
+- `UpsertViewer(id, login, displayName)` / `GetViewer(id)`.
+- `CreateViewerSession(viewerID, ttl)` → `vsid`; `GetValidViewerSession(id)` →
+  `*Viewer` (opportunistic expiry delete); `DeleteViewerSession(id)`.
+- `CreditBits(msgID, viewerID, login, name, streamerID, bits)` → `(credited, err)`
+  — one tx: insert dedup row (duplicate ⇒ `credited=false`), upsert the viewer,
+  `credits += bits`, ledger `reason='cheer'`.
+- `SpendCredits(viewerID, streamerID, cost, ref)` → `(newBalance, ok, err)` —
+  conditional `UPDATE … WHERE credits >= cost`; `ok=false` (balance untouched) on
+  insufficient funds; ledger `reason='submit'`.
+- `Balance(viewerID, streamerID)` → credits (0 when none).
+- `GrantCredits(viewerID, streamerID, amount)` — dev/testing top-up; ledger
+  `reason='dev_grant'`.
+
+The `Viewer` struct mirrors `Streamer` (`ID`, `Login`, `DisplayName`, `CreatedAt`,
+`LastSeenAt`).
 
 **What is NOT persisted:** queue items, invite tokens, session active-state,
 now-playing, pause/bypass. All ephemeral (see below).
@@ -134,6 +206,7 @@ Public `Status{Active, StartedAt}` is safe to broadcast; `Token()` is admin-only
 | Value | Minted by | Lifetime | Exposed to | Purpose |
 | --- | --- | --- | --- | --- |
 | `sid` (login session) | `store.CreateAuthSession` (32B) | 30 days, server-checked | Browser cookie (HttpOnly) | Authenticate a streamer. |
+| `vsid` (viewer session) | `store.CreateViewerSession` (32B) | 30 days, server-checked | Browser cookie (HttpOnly) | Authenticate a viewer (separate identity). |
 | `player_key` | `store.UpsertStreamer` (16B) | Permanent, per account | In `/p/<key>` URL | Stable OBS player address. |
 | moderator link `token` | `store.RegenerateModeratorLink` (24B) | Until regenerate/revoke (persisted) | Owner admin + `/mod/<token>` | Delegate the console to a moderator (no login). |
 | invite `token` | `session.newToken` (18B) | Until stop/regenerate/restart | Admin view + `/s/<token>` | Let anonymous viewers submit. |

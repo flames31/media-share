@@ -6,9 +6,11 @@ open a submission session, and share an invite link; viewers submit YouTube clip
 their console and plays approved clips on their own player page (an OBS browser
 source). Many streamers run isolated sessions at the same time — no crosstalk.
 
-Payments are **not** wired up yet — for now the play length is entered manually on
-the submission form. That field is where the future donation→duration formula
-(e.g. $1 = 10s) will plug in.
+Viewers **log in with Twitch** and **spend credits** to queue clips. Credits are
+earned by cheering **bits** in a streamer's channel (a Twitch EventSub webhook,
+HMAC-verified, credits the cheerer's per-channel balance); a clip costs
+`play-length × CREDITS_PER_SECOND`. Set `CREDITS_ENABLED=false` (or use
+`DEV_LOGIN`) to bypass credits while testing.
 
 ## Features
 
@@ -20,9 +22,16 @@ the submission form. That field is where the future donation→duration formula
 - **Streamer-controlled sessions** — submissions are closed until the streamer
   clicks **Start media share**, which generates a shareable invite link
   (`/s/<token>`). **Stop** (or **Regenerate link**) invalidates old links at once.
-- **Submission page** (via the invite link) — YouTube link + start time + play
-  length, or a media-file upload. Shows "Media share is closed" when there's no
-  open session.
+- **Submission page** (via the invite link) — viewers **log in with Twitch**, then
+  submit a YouTube link + start time + play length, or a media-file upload. Shows
+  their per-channel **credit balance** and a live **cost** for the chosen length,
+  and "Media share is closed" when there's no open session.
+- **Bits → credits** — cheering bits in a streamer's channel credits the viewer's
+  balance in *that* channel (1 bit = 1 credit), via a Twitch **EventSub** webhook
+  that's HMAC-verified and replay-deduplicated. Queuing a clip spends
+  `length × CREDITS_PER_SECOND` credits, deducted atomically before it's queued
+  (insufficient balance → the submit is refused with a "cheer bits" prompt).
+  Subscriptions are created out-of-band (Twitch CLI/dashboard) for now.
 - **Per-streamer player** (`/p/<key>`) — a stable capability URL for OBS that
   auto-plays that streamer's approved queue. YouTube via the IFrame API (honours
   start time, stops after the set length); uploads via an HTML5 `<video>`.
@@ -84,8 +93,9 @@ Then open <http://localhost:8080/> and **Log in with Twitch**.
    Browser source. It stays the same across sessions and restarts.
 3. Click **Start media share** → copy the **invite link** (`/s/<token>`) and share
    it with viewers (chat, panel, etc.).
-4. Viewers open the link, submit a YouTube clip or upload; it appears under
-   **Pending review**. Approve/reject; approved clips auto-play on the player.
+4. Viewers open the link, **log in with Twitch**, and submit a YouTube clip or
+   upload — spending credits earned from cheering bits in that channel. It appears
+   under **Pending review**. Approve/reject; approved clips auto-play on the player.
 5. Click **Stop media share** (or **Regenerate link**) to close submissions — old
    links stop working immediately.
 
@@ -113,7 +123,10 @@ All configuration is via environment variables (see `.env.example`):
 | `ALLOWED_MEDIA_EXT` | `mp4,webm,mov,ogg` | Allowed upload extensions |
 | `TWITCH_CLIENT_ID` | _(empty)_ | Twitch app Client ID (**required** for login) |
 | `TWITCH_CLIENT_SECRET` | _(empty)_ | Twitch app Client Secret (**required** for login) |
-| `DEV_LOGIN` | _(off)_ | `1` shows a local password-less "Dev login" button — testing only, never in production |
+| `TWITCH_EVENTSUB_SECRET` | _(empty)_ | Shared secret to HMAC-verify the bits/cheer EventSub webhook (must match the subscription's secret) |
+| `CREDITS_ENABLED` | `true` | `false` disables credit charging (free submits) — handy for local testing |
+| `CREDITS_PER_SECOND` | `10` | Credits charged per second of play length (10s = 100 bits) |
+| `DEV_LOGIN` | _(off)_ | `1` shows password-less "Dev login" (streamer + viewer) and enables the `/api/dev/credit` top-up — testing only, never in production |
 
 ## Project layout
 
@@ -121,15 +134,15 @@ All configuration is via environment variables (see `.env.example`):
 main.go                     wiring: config → store(DB) → registry → auth → hub → server
 internal/
   config/                   env configuration
-  store/                    SQLite: streamers + login sessions + moderator links (+ tests)
-  oauth/                    Twitch "Log in with Twitch" OAuth client (+ tests)
-  auth/                     login flow, cookie sessions, owner/moderator roles, RequireStreamer/RequireOwner
+  store/                    SQLite: streamers + login sessions + moderator links + viewers/credits (+ tests)
+  oauth/                    Twitch "Log in with Twitch" OAuth client, shared by streamer + viewer login (+ tests)
+  auth/                     streamer + viewer login, cookie sessions, owner/moderator roles, RequireStreamer/RequireOwner/RequireViewer
   tenant/                   per-streamer registry (queue+session), token/key indexes (+ tests)
   queue/                    queue Manager, state machine, YouTube URL parsing (+ tests)
   session/                  streamer-controlled submission sessions (+ tests)
   hub/                      room-scoped WebSocket fan-out (+ tests)
-  server/                   HTTP handlers (login, admin, moderators, player, submit, ws)
-  twitch/                   chat bot — kept for a future per-streamer re-wire (deferred)
+  server/                   HTTP handlers (login, admin, moderators, player, submit, viewer credits, eventsub webhook, ws)
+  twitch/                   EventSub signature verify (wired) + chat bot kept for a future per-streamer re-wire (deferred)
 web/
   templates/                login / admin / player / submit / mod_claim pages (embedded)
   static/                   CSS + vanilla JS (embedded)
@@ -169,6 +182,8 @@ go test ./...
 
 - Per-streamer Twitch chat bot (`!skip`, `!pause`, …) — re-wire `internal/twitch`
   per tenant.
-- Payments and the real donation→duration formula (the manual length field is the
-  placeholder).
+- **EventSub auto-subscribe**: request `bits:read` on streamer connect, store +
+  refresh the streamer token, and create/delete the cheer subscription via an app
+  token (subscriptions are created out-of-band today).
+- Credit refunds on skip/reject, credit expiry, and a per-viewer spend history UI.
 - Per-user rate limiting / anti-spam; idle-tenant eviction; queue persistence.

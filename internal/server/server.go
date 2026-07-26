@@ -56,18 +56,30 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /p/{key}", s.handlePlayerPage)
 	mux.HandleFunc("GET /mod/{token}", s.handleModClaimPage)
 
-	// Auth (Log in with Twitch)
+	// Auth (Log in with Twitch) — streamers and viewers share the callback.
 	mux.HandleFunc("GET /auth/twitch/start", s.handleAuthStart)
 	mux.HandleFunc("GET /auth/twitch/callback", s.handleAuthCallback)
 	mux.HandleFunc("POST /auth/dev/login", s.handleDevLogin)
 	mux.HandleFunc("POST /mod/{token}", s.handleModClaim)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 
+	// Viewer auth (Log in with Twitch to submit + hold credits)
+	mux.HandleFunc("GET /viewer/auth/start", s.handleViewerAuthStart)
+	mux.HandleFunc("POST /viewer/logout", s.handleViewerLogout)
+	mux.HandleFunc("POST /viewer/dev/login", s.handleViewerDevLogin)
+
 	// Public API (tenant resolved from an invite token or player key)
-	mux.HandleFunc("POST /api/submit", s.handleSubmit)
+	mux.HandleFunc("POST /api/submit", s.auth.RequireViewer(s.handleSubmit))
 	mux.HandleFunc("GET /api/session/check", s.handleSessionCheck)
 	mux.HandleFunc("POST /api/player/ended", s.handlePlayerEnded)
 	mux.HandleFunc("GET /ws", s.handleWS)
+
+	// Viewer credits
+	mux.HandleFunc("GET /api/viewer/me", s.auth.RequireViewer(s.handleViewerMe))
+	mux.HandleFunc("POST /api/dev/credit", s.handleDevCredit)
+
+	// Twitch EventSub webhook (bits → credits). Public: authenticated by HMAC.
+	mux.HandleFunc("POST /api/webhooks/twitch/eventsub", s.handleEventSub)
 
 	// Admin API (cookie-gated; tenant taken from the authenticated streamer)
 	mux.HandleFunc("GET /api/admin/me", s.auth.RequireStreamer(s.handleMe))

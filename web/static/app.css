@@ -171,6 +171,18 @@ input[type=file] { color: var(--muted); font-size: 14px; }
 .switch > input:checked ~ .switch-label { color: var(--text); }
 .switch > input:focus-visible + .switch-track { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 
+/* submit page: viewer identity bar + credit cost */
+.viewer-bar {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 16px; padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px; color: var(--muted);
+}
+.viewer-bar .spacer { flex: 1; }
+.viewer-bar strong { color: var(--text); }
+.cost-line { margin-top: 16px; font-size: 15px; color: var(--text); }
+.cost-line strong { color: var(--accent); font-size: 18px; }
+
 /* player page */
 body.player-body { background: #000; }
 .player-stage {

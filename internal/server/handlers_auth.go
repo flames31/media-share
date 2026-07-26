@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"media-share/internal/auth"
 	"media-share/internal/store"
 )
 
@@ -17,7 +18,10 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.auth.AuthorizeURL(), http.StatusSeeOther)
 }
 
-// handleAuthCallback completes login and drops the streamer at the console.
+// handleAuthCallback completes login for the shared Twitch redirect URI. The
+// single-use state carries whether this is a streamer or a viewer login (and, for
+// viewers, the submit page to return to), so both flows use one registered
+// redirect URI.
 func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if e := q.Get("error"); e != "" {
@@ -29,11 +33,34 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		redirectLoginError(w, r, "Missing code or state.")
 		return
 	}
-	if _, err := s.auth.Login(r.Context(), w, code, state); err != nil {
+	info, ok := s.auth.ConsumeState(state)
+	if !ok {
+		redirectLoginError(w, r, "Invalid or expired login state.")
+		return
+	}
+
+	if info.Kind == auth.KindViewer {
+		if _, err := s.auth.LoginViewer(r.Context(), w, code); err != nil {
+			redirectLoginError(w, r, err.Error())
+			return
+		}
+		http.Redirect(w, r, submitReturnPath(info.ReturnTo), http.StatusSeeOther)
+		return
+	}
+
+	if _, err := s.auth.Login(r.Context(), w, code); err != nil {
 		redirectLoginError(w, r, err.Error())
 		return
 	}
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
+// submitReturnPath is the submit page a viewer should land on after login.
+func submitReturnPath(token string) string {
+	if token == "" {
+		return "/submit"
+	}
+	return "/s/" + url.PathEscape(token)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

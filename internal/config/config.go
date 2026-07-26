@@ -31,6 +31,16 @@ type Config struct {
 	TwitchClientID     string
 	TwitchClientSecret string
 
+	// TwitchEventSubSecret is the shared secret used to HMAC-verify inbound Twitch
+	// EventSub webhook notifications (bits/cheers). Must match the secret set when
+	// the EventSub subscription was created.
+	TwitchEventSubSecret string
+
+	// Credit economy. Cheered bits become per-channel credits (1 bit = 1 credit);
+	// queuing a clip costs CreditsPerSecond per second of play length.
+	CreditsEnabled   bool
+	CreditsPerSecond int64
+
 	// DevLogin, when true, enables a password-less local "Dev login" so you can
 	// try the app without registering a Twitch app. Never enable in production.
 	DevLogin bool
@@ -54,15 +64,21 @@ func Load() *Config {
 		TwitchUsername: strings.ToLower(env("TWITCH_BOT_USERNAME", "")),
 		TwitchToken:    env("TWITCH_OAUTH_TOKEN", ""),
 
-		TwitchClientID:     env("TWITCH_CLIENT_ID", ""),
-		TwitchClientSecret: env("TWITCH_CLIENT_SECRET", ""),
-		DevLogin:           envBool("DEV_LOGIN", false),
+		TwitchClientID:       env("TWITCH_CLIENT_ID", ""),
+		TwitchClientSecret:   env("TWITCH_CLIENT_SECRET", ""),
+		TwitchEventSubSecret: env("TWITCH_EVENTSUB_SECRET", ""),
+		CreditsEnabled:       envBool("CREDITS_ENABLED", true),
+		CreditsPerSecond:     envInt("CREDITS_PER_SECOND", 10),
+		DevLogin:             envBool("DEV_LOGIN", false),
 	}
 	if !c.OAuthEnabled() && !c.DevLogin {
 		log.Println("WARNING: Twitch login is not configured. Set TWITCH_CLIENT_ID/SECRET, or DEV_LOGIN=1 for local testing — otherwise no one can log in.")
 	}
 	if c.DevLogin {
 		log.Println("WARNING: DEV_LOGIN is enabled — anyone can log in as a local dev account without Twitch. Do NOT use in production.")
+	}
+	if c.CreditsEnabled && c.TwitchEventSubSecret == "" {
+		log.Println("WARNING: credits are enabled but TWITCH_EVENTSUB_SECRET is empty — the bits webhook will reject all notifications. Set it (and DEV_LOGIN=1 to test spending without cheering).")
 	}
 	return c
 }

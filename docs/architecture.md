@@ -4,13 +4,17 @@
 
 A **multi-tenant** platform. Many streamers log in with Twitch at the same time;
 each gets an isolated workspace: their own submission queue, their own
-media-share session (invite link), and their own player page for OBS. Viewers
-stay anonymous — a valid invite link is all they need, and it is scoped to one
-streamer. No crosstalk between tenants.
+media-share session (invite link), and their own player page for OBS. Everything
+is scoped to one streamer — no crosstalk between tenants.
 
-Payments are **not** wired up. The "play length" is entered manually on the
-submission form; that field is the placeholder for a future donation→duration
-formula.
+Viewers **log in with Twitch** (a separate identity from streamers) and **spend
+credits** to queue clips. Credits are earned by cheering bits in a streamer's
+channel — a Twitch EventSub webhook, authenticated by HMAC, credits the cheering
+viewer's per-channel balance server-side. A submission costs `duration ×
+CREDITS_PER_SECOND` credits, deducted atomically before the clip is queued.
+EventSub **subscriptions are created out-of-band** for now; the server only
+receives notifications (auto-subscribe is a later phase). With
+`CREDITS_ENABLED=false` (or `DEV_LOGIN`) the spend is bypassable for local testing.
 
 ## The one idea to hold onto: the tenant
 
@@ -24,8 +28,9 @@ Streamer (a Twitch account, persisted in SQLite)
 ```
 
 The `tenant.Registry` maps **streamer id → Tenant** and also maintains an
-**invite token → streamer id** index so an anonymous viewer's submission can be
-routed to the right tenant without any login.
+**invite token → streamer id** index so a viewer's submission is routed to the
+right tenant from the invite token alone (the viewer's own login only identifies
+*who* is submitting, for crediting; the token still selects the tenant).
 
 The WebSocket **hub** groups connected clients into **rooms**, where `room ==
 streamer id`. A tenant's queue/session broadcasts go to that room only, so a
