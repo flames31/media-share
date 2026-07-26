@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -117,6 +118,7 @@ func (a *Authenticator) Login(ctx context.Context, w http.ResponseWriter, code s
 		return nil, err
 	}
 	a.setCookie(w, sid)
+	slog.Info("streamer logged in", "streamer_id", streamer.ID, "login", streamer.Login)
 	return streamer, nil
 }
 
@@ -137,6 +139,7 @@ func (a *Authenticator) LoginViewer(ctx context.Context, w http.ResponseWriter, 
 		return nil, err
 	}
 	a.setViewerCookie(w, vsid)
+	slog.Info("viewer logged in", "viewer_id", viewer.ID, "login", viewer.Login)
 	return viewer, nil
 }
 
@@ -150,6 +153,7 @@ func (a *Authenticator) LoginModerator(w http.ResponseWriter, ownerID string) er
 		return err
 	}
 	a.setCookie(w, sid)
+	slog.Info("moderator session created", "owner_id", ownerID)
 	return nil
 }
 
@@ -166,6 +170,7 @@ func (a *Authenticator) DevLogin(w http.ResponseWriter) (*store.Streamer, error)
 		return nil, err
 	}
 	a.setCookie(w, sid)
+	slog.Debug("dev streamer login", "streamer_id", streamer.ID)
 	return streamer, nil
 }
 
@@ -182,6 +187,7 @@ func (a *Authenticator) DevLoginViewer(w http.ResponseWriter) (*store.Viewer, er
 		return nil, err
 	}
 	a.setViewerCookie(w, vsid)
+	slog.Debug("dev viewer login", "viewer_id", viewer.ID)
 	return viewer, nil
 }
 

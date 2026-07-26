@@ -4,7 +4,7 @@ package hub
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -61,7 +61,7 @@ func New(checkOrigin func(*http.Request) bool) *Hub {
 func (h *Hub) BroadcastTo(room, msgType string, payload any) {
 	data, err := json.Marshal(Message{Type: msgType, Payload: payload})
 	if err != nil {
-		log.Printf("hub: marshal %s: %v", msgType, err)
+		slog.Error("hub: marshal broadcast failed", "type", msgType, "err", err)
 		return
 	}
 	h.mu.Lock()

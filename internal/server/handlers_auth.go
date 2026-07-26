@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -35,12 +36,14 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	info, ok := s.auth.ConsumeState(state)
 	if !ok {
+		slog.Warn("oauth callback: invalid or expired state")
 		redirectLoginError(w, r, "Invalid or expired login state.")
 		return
 	}
 
 	if info.Kind == auth.KindViewer {
 		if _, err := s.auth.LoginViewer(r.Context(), w, code); err != nil {
+			slog.Warn("viewer login failed", "err", err)
 			redirectLoginError(w, r, err.Error())
 			return
 		}
@@ -49,6 +52,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := s.auth.Login(r.Context(), w, code); err != nil {
+		slog.Warn("streamer login failed", "err", err)
 		redirectLoginError(w, r, err.Error())
 		return
 	}

@@ -2,7 +2,7 @@
 package config
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"slices"
 	"strconv"
@@ -72,13 +72,13 @@ func Load() *Config {
 		DevLogin:             envBool("DEV_LOGIN", false),
 	}
 	if !c.OAuthEnabled() && !c.DevLogin {
-		log.Println("WARNING: Twitch login is not configured. Set TWITCH_CLIENT_ID/SECRET, or DEV_LOGIN=1 for local testing — otherwise no one can log in.")
+		slog.Warn("Twitch login is not configured; set TWITCH_CLIENT_ID/SECRET, or DEV_LOGIN=1 for local testing — otherwise no one can log in")
 	}
 	if c.DevLogin {
-		log.Println("WARNING: DEV_LOGIN is enabled — anyone can log in as a local dev account without Twitch. Do NOT use in production.")
+		slog.Warn("DEV_LOGIN is enabled — anyone can log in as a local dev account without Twitch; do NOT use in production")
 	}
 	if c.CreditsEnabled && c.TwitchEventSubSecret == "" {
-		log.Println("WARNING: credits are enabled but TWITCH_EVENTSUB_SECRET is empty — the bits webhook will reject all notifications. Set it (and DEV_LOGIN=1 to test spending without cheering).")
+		slog.Warn("credits are enabled but TWITCH_EVENTSUB_SECRET is empty — the bits webhook will reject all notifications; set it (and DEV_LOGIN=1 to test spending without cheering)")
 	}
 	return c
 }
@@ -142,7 +142,7 @@ func envInt(key string, def int64) int64 {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return n
 		}
-		log.Printf("WARNING: %s=%q is not a valid integer; using default %d", key, v, def)
+		slog.Warn("invalid integer env var; using default", "key", key, "value", v, "default", def)
 	}
 	return def
 }

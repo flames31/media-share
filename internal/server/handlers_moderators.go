@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"media-share/internal/auth"
@@ -37,20 +38,24 @@ func (s *Server) handleModeratorsStatus(w http.ResponseWriter, r *http.Request) 
 // handleModeratorsLink mints (or regenerates) the streamer's moderator link. The
 // old link, if any, stops working immediately.
 func (s *Server) handleModeratorsLink(w http.ResponseWriter, r *http.Request) {
-	token, err := s.store.RegenerateModeratorLink(s.ownerID(r))
+	owner := s.ownerID(r)
+	token, err := s.store.RegenerateModeratorLink(owner)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not create moderator link")
 		return
 	}
+	slog.Info("moderator link generated", "streamer_id", owner)
 	writeJSON(w, http.StatusOK, map[string]string{"link": s.moderatorLink(token)})
 }
 
 // handleModeratorsRevoke removes the moderator link and kicks any current
 // moderators (their sessions are deleted).
 func (s *Server) handleModeratorsRevoke(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.RevokeModeratorAccess(s.ownerID(r)); err != nil {
+	owner := s.ownerID(r)
+	if err := s.store.RevokeModeratorAccess(owner); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not revoke moderator access")
 		return
 	}
+	slog.Warn("moderator access revoked; current moderators signed out", "streamer_id", owner)
 	writeOK(w)
 }

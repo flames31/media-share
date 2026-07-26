@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -50,10 +50,16 @@ func (s *Server) handleEventSub(w http.ResponseWriter, r *http.Request) {
 
 	// Authenticate the message BEFORE trusting anything in it.
 	if !twitch.VerifyEventSubSignature(r.Header, body, s.cfg.TwitchEventSubSecret) {
+		slog.Warn("eventsub: rejected message with invalid signature",
+			"message_id", r.Header.Get(twitch.HeaderMessageID),
+			"remote", r.RemoteAddr)
 		http.Error(w, "invalid signature", http.StatusForbidden)
 		return
 	}
 	if !twitch.EventSubTimestampFresh(r.Header, eventSubReplayWindow) {
+		slog.Warn("eventsub: rejected stale message",
+			"message_id", r.Header.Get(twitch.HeaderMessageID),
+			"timestamp", r.Header.Get(twitch.HeaderMessageTimestamp))
 		http.Error(w, "stale message", http.StatusForbidden)
 		return
 	}
@@ -67,13 +73,14 @@ func (s *Server) handleEventSub(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get(twitch.HeaderMessageType) {
 	case twitch.MessageTypeVerification:
 		// Activate the subscription by echoing the challenge verbatim as plain text.
+		slog.Info("eventsub: subscription verification challenge", "subscription", env.Subscription.Type)
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, env.Challenge)
 		return
 
 	case twitch.MessageTypeRevocation:
-		log.Printf("eventsub: subscription %q revoked", env.Subscription.Type)
+		slog.Warn("eventsub: subscription revoked by Twitch", "subscription", env.Subscription.Type)
 		w.WriteHeader(http.StatusOK)
 		return
 
@@ -93,19 +100,24 @@ func (s *Server) handleEventSub(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCheerNotification(msgID string, raw json.RawMessage) {
 	var e cheerEvent
 	if err := json.Unmarshal(raw, &e); err != nil {
-		log.Printf("eventsub: bad event payload: %v", err)
+		slog.Error("eventsub: bad event payload", "message_id", msgID, "err", err)
 		return
 	}
 	// Anonymous cheers carry no user id, so there is no balance to credit.
 	if e.IsAnonymous || e.UserID == "" || e.BroadcasterUserID == "" || e.Bits <= 0 {
+		slog.Debug("eventsub: cheer not creditable (anonymous or empty)",
+			"message_id", msgID, "anonymous", e.IsAnonymous, "bits", e.Bits)
 		return
 	}
 	credited, err := s.store.CreditBits(msgID, e.UserID, e.UserLogin, e.UserName, e.BroadcasterUserID, e.Bits)
 	if err != nil {
-		log.Printf("eventsub: credit failed (msg %s): %v", msgID, err)
+		slog.Error("eventsub: credit failed", "message_id", msgID, "err", err)
 		return
 	}
 	if credited {
-		log.Printf("eventsub: credited %d to viewer %s in channel %s", e.Bits, e.UserID, e.BroadcasterUserID)
+		slog.Info("eventsub: credited bits",
+			"bits", e.Bits, "viewer_id", e.UserID, "streamer_id", e.BroadcasterUserID)
+	} else {
+		slog.Debug("eventsub: duplicate cheer ignored (already credited)", "message_id", msgID)
 	}
 }

@@ -2,7 +2,7 @@ package config
 
 import (
 	"bufio"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 )
@@ -25,7 +25,7 @@ func loadDotEnv() {
 	f, err := os.Open(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("config: could not read %s: %v", path, err)
+			slog.Warn("could not read env file", "path", path, "err", err)
 		}
 		return
 	}
@@ -46,11 +46,11 @@ func loadDotEnv() {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		log.Printf("config: error reading %s: %v", path, err)
+		slog.Warn("error reading env file", "path", path, "err", err)
 		return
 	}
 	if loaded > 0 {
-		log.Printf("config: loaded %d setting(s) from %s", loaded, path)
+		slog.Debug("loaded settings from env file", "count", loaded, "path", path)
 	}
 }
 

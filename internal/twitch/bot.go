@@ -5,7 +5,7 @@ package twitch
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -71,7 +71,7 @@ func (b *Bot) Run(ctx context.Context) {
 			return
 		}
 		if err := b.session(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("twitch: session ended: %v (reconnecting in %s)", err, backoff)
+			slog.Warn("twitch: session ended, reconnecting", "err", err, "backoff", backoff)
 			select {
 			case <-ctx.Done():
 				return
@@ -126,7 +126,7 @@ func (b *Bot) session(ctx context.Context) error {
 	if err := send("JOIN #%s", b.channel); err != nil {
 		return err
 	}
-	log.Printf("twitch: connected as %s in #%s", username, b.channel)
+	slog.Info("twitch: connected", "bot", username, "channel", b.channel)
 
 	for {
 		_, data, err := conn.ReadMessage()

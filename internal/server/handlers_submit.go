@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -73,6 +74,8 @@ func (s *Server) chargeSubmit(w http.ResponseWriter, v *store.Viewer, streamerID
 		return false
 	}
 	if !ok {
+		slog.Debug("submit rejected: insufficient credits",
+			"viewer_id", v.ID, "streamer_id", streamerID, "cost", cost, "balance", bal)
 		writeJSON(w, http.StatusPaymentRequired, map[string]any{
 			"error":   "You don't have enough credits — cheer bits in this channel to top up.",
 			"cost":    cost,
@@ -80,6 +83,8 @@ func (s *Server) chargeSubmit(w http.ResponseWriter, v *store.Viewer, streamerID
 		})
 		return false
 	}
+	slog.Debug("credits spent on submit",
+		"viewer_id", v.ID, "streamer_id", streamerID, "cost", cost, "balance", bal)
 	return true
 }
 
@@ -124,6 +129,14 @@ func (s *Server) submitYouTube(w http.ResponseWriter, r *http.Request, t *tenant
 		return
 	}
 	created := t.Queue.Submit(item)
+	slog.Info("clip submitted",
+		"type", string(created.Type),
+		"streamer_id", t.StreamerID,
+		"viewer_id", viewer.ID,
+		"item_id", created.ID,
+		"duration_s", duration,
+		"status", string(created.Status),
+	)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":     created.ID,
 		"title":  created.Title,
@@ -192,6 +205,14 @@ func (s *Server) submitUpload(w http.ResponseWriter, r *http.Request, t *tenant.
 		return
 	}
 	created := t.Queue.Submit(item)
+	slog.Info("clip submitted",
+		"type", string(created.Type),
+		"streamer_id", t.StreamerID,
+		"viewer_id", viewer.ID,
+		"item_id", created.ID,
+		"duration_s", duration,
+		"status", string(created.Status),
+	)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":     created.ID,
 		"title":  created.Title,

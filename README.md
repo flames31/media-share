@@ -172,6 +172,17 @@ Detailed docs live in [`docs/`](docs/):
   shared. Stopping/regenerating a session invalidates old invite links at once.
 - Admin state-changing requests are same-origin-guarded (SameSite + Sec-Fetch-Site).
 
+## Logging
+
+Structured logs (`log/slog`) print to the terminal (stderr). Levels: **Error**
+(an operation failed), **Warn** (handled but suspicious — bad webhook signature,
+misconfiguration), **Info** (production flow checkpoints — logins, session
+open/close, submissions, credited bits), and **Debug** (verbose local detail).
+**Debug is only emitted when `DEV_LOGIN=1`**, so production logs stay lean while
+dev shows the full flow. Logging is configured in one place
+(`internal/logging`); pointing it at a file later is a one-line change to the
+output writer.
+
 ## Testing
 
 ```sh

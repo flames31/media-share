@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -78,17 +78,17 @@ func (c *Controller) Start(ctx context.Context, legacy *Token) {
 
 	tok, err := c.store.Get()
 	if err != nil && !errors.Is(err, ErrNoToken) {
-		log.Printf("twitch: could not read stored token: %v", err)
+		slog.Warn("twitch: could not read stored token", "err", err)
 	}
 	if tok == nil && legacy != nil {
 		tok = legacy // in-memory only; legacy manual tokens are not persisted
-		log.Printf("twitch: using legacy TWITCH_OAUTH_TOKEN for #%s", legacy.Channel)
+		slog.Info("twitch: using legacy TWITCH_OAUTH_TOKEN", "channel", legacy.Channel)
 	}
 	if tok == nil {
 		if c.available {
-			log.Println("twitch: ready — connect a bot account from the admin console")
+			slog.Info("twitch: ready — connect a bot account from the admin console")
 		} else {
-			log.Println("twitch: disabled (set TWITCH_CLIENT_ID/SECRET for the Connect button, or the legacy TWITCH_* vars)")
+			slog.Info("twitch: disabled (set TWITCH_CLIENT_ID/SECRET for the Connect button, or the legacy TWITCH_* vars)")
 		}
 		c.broadcastStatus()
 		return
@@ -140,9 +140,9 @@ func (c *Controller) Disconnect() {
 	c.mu.Unlock()
 
 	if err := c.store.Clear(); err != nil {
-		log.Printf("twitch: clear token: %v", err)
+		slog.Error("twitch: clear token failed", "err", err)
 	}
-	log.Println("twitch: disconnected")
+	slog.Info("twitch: disconnected")
 	c.broadcastStatus()
 }
 
@@ -195,14 +195,14 @@ func (c *Controller) credentials(ctx context.Context) (Creds, error) {
 			return Creds{}, err
 		}
 		if err := c.store.Save(refreshed); err != nil {
-			log.Printf("twitch: save refreshed token: %v", err)
+			slog.Error("twitch: save refreshed token failed", "err", err)
 		}
 		c.mu.Lock()
 		c.token = refreshed
 		c.lastErr = ""
 		c.mu.Unlock()
 		tok = refreshed
-		log.Printf("twitch: refreshed access token for %s", tok.BotLogin)
+		slog.Info("twitch: refreshed access token", "login", tok.BotLogin)
 	}
 
 	return Creds{AccessToken: tok.AccessToken, Login: tok.BotLogin, Channel: tok.Channel}, nil
@@ -212,7 +212,7 @@ func (c *Controller) setError(msg string) {
 	c.mu.Lock()
 	c.lastErr = msg
 	c.mu.Unlock()
-	log.Printf("twitch: %s", msg)
+	slog.Warn("twitch: bot error", "detail", msg)
 	c.broadcastStatus()
 }
 

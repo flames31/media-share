@@ -4,8 +4,9 @@ package server
 
 import (
 	"html/template"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"media-share/internal/auth"
 	"media-share/internal/config"
@@ -33,7 +34,8 @@ func New(cfg *config.Config, st *store.Store, reg *tenant.Registry, a *auth.Auth
 	for _, name := range []string{"submit", "player", "admin", "login", "mod_claim"} {
 		t, err := template.ParseFS(web.TemplatesFS, "templates/"+name+".html")
 		if err != nil {
-			log.Fatalf("parse template %s: %v", name, err)
+			slog.Error("parse template", "name", name, "err", err)
+			os.Exit(1)
 		}
 		s.tmpl[name] = t
 	}

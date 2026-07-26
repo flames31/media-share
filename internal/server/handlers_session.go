@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -46,16 +47,22 @@ func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
-	s.tenant(r).StartSession()
+	t := s.tenant(r)
+	t.StartSession()
+	slog.Info("media share opened", "streamer_id", t.StreamerID)
 	writeJSON(w, http.StatusOK, s.adminSessionView(r))
 }
 
 func (s *Server) handleSessionRegenerate(w http.ResponseWriter, r *http.Request) {
-	s.tenant(r).RegenerateSession()
+	t := s.tenant(r)
+	t.RegenerateSession()
+	slog.Info("media share invite link regenerated", "streamer_id", t.StreamerID)
 	writeJSON(w, http.StatusOK, s.adminSessionView(r))
 }
 
 func (s *Server) handleSessionStop(w http.ResponseWriter, r *http.Request) {
-	s.tenant(r).StopSession()
+	t := s.tenant(r)
+	t.StopSession()
+	slog.Info("media share closed", "streamer_id", t.StreamerID)
 	writeJSON(w, http.StatusOK, s.adminSessionView(r))
 }

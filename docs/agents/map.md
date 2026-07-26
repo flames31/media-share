@@ -51,6 +51,7 @@ Repo-relative paths. Line counts are rough; treat them as "how big is this."
 | --- | --- |
 | `internal/config/config.go` | `Config` struct + `Load()`; derived helpers `OAuthEnabled`, `BaseURL`, `TwitchRedirectURI`, `CookieSecure`, `MaxUploadBytes`, `ExtAllowed`; `env`/`envInt`/`envBool` readers. Credit settings: `TwitchEventSubSecret`, `CreditsEnabled`, `CreditsPerSecond`. |
 | `internal/config/dotenv.go` | `.env` loader (`loadDotEnv`, `parseDotEnvLine`). Real env wins; `ENV_FILE` overrides path; missing file is fine. |
+| `internal/logging/logging.go` | `Init()` installs the process-wide `log/slog` handler (text → stderr); `SetDevLogin(bool)` raises the level to Debug under `DEV_LOGIN`. Everything else just calls `slog.Info/Warn/Error/Debug`. Swap the writer here to log to a file. |
 
 ## Frontend (embedded via `web/embed.go`)
 

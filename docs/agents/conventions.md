@@ -94,8 +94,18 @@ concatenation.
   `crypto/rand` hex (`store.randToken`, `session.newToken`, `auth.randHex`).
 - **Time:** store as Unix seconds; truncate to whole seconds before comparing
   in-memory values to DB reads (`store.UpsertStreamer`).
-- **Logging:** `log` with the `media-share:` prefix set in `main.go`. Log
-  operational warnings at startup; don't log secrets.
+- **Logging:** structured `log/slog` through the default logger
+  (`slog.Info/Warn/Error/Debug`, key/value attrs — never `fmt`-interpolate into the
+  message). One handler is installed in `main.go` via `internal/logging`
+  (`logging.Init()` then `logging.SetDevLogin(cfg.DevLogin)`); it writes to stderr
+  and swapping in a file writer is the only change needed to log to a file. Levels:
+  **Error** (an op/request failed), **Warn** (handled-but-suspicious: bad
+  signature, misconfig), **Info** (production flow checkpoints: logins,
+  session open/close, submissions, credits), **Debug** (dev-only detail — dev
+  logins, dev credit, dedup no-ops, insufficient-credit rejections). **Debug is
+  only emitted when `DEV_LOGIN=1`.** Log at *checkpoints that show the flow*, not
+  every function; include ids (`streamer_id`, `viewer_id`, `item_id`, `message_id`)
+  but **never secrets** (tokens, cookies, signatures, credentials).
 
 ## Gotchas that have bitten before
 

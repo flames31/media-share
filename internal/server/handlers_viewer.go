@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -107,5 +108,6 @@ func (s *Server) handleDevCredit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bal, _ := s.store.Balance(v.ID, streamerID)
+	slog.Debug("dev credit granted", "viewer_id", v.ID, "streamer_id", streamerID, "amount", amount, "balance", bal)
 	writeJSON(w, http.StatusOK, map[string]any{"balance": bal, "granted": amount})
 }

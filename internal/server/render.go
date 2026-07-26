@@ -3,7 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -15,7 +15,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("writeJSON: %v", err)
+		slog.Error("writeJSON encode failed", "err", err)
 	}
 }
 
@@ -33,7 +33,7 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	}
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {
-		log.Printf("render %s: %v", name, err)
+		slog.Error("render template failed", "name", name, "err", err)
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
