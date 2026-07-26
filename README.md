@@ -30,6 +30,11 @@ the submission form. That field is where the future donation→duration formula
   (thumbnails/previews), approve/reject, the approved queue with remove, and
   controls: **Skip**, **Pause/Resume**, **Clear queue**, **Clear all**, and a
   **Bypass verification** toggle. Shows the invite link and the OBS player URL.
+- **Moderators** — the streamer can generate a **moderator link** and hand the
+  console to trusted helpers (no account needed) so they don't have to run it
+  themselves. Moderators get full moderation + session control; only the streamer
+  can mint or **revoke** moderator links (revoking signs current moderators out
+  immediately).
 - Everything updates in real time over WebSockets. Queue/session state is
   in-memory per streamer; uploaded files persist under `MEDIA_DIR`.
 
@@ -87,6 +92,13 @@ Then open <http://localhost:8080/> and **Log in with Twitch**.
 Each streamer only ever sees and controls their own queue; sessions run
 concurrently and independently.
 
+**Handing off to moderators (optional):** in the console, generate a **moderator
+link** and share it with someone you trust. They open it, click **Enter as
+moderator**, and land on the same console — approving/rejecting, skipping, and
+opening/closing the media share on your behalf (no account needed), so you don't
+have to run it yourself. Only you can mint or **revoke** the link; revoking signs
+current moderators out at once.
+
 ## Configuration
 
 All configuration is via environment variables (see `.env.example`):
@@ -109,17 +121,17 @@ All configuration is via environment variables (see `.env.example`):
 main.go                     wiring: config → store(DB) → registry → auth → hub → server
 internal/
   config/                   env configuration
-  store/                    SQLite: streamers + login sessions (+ tests)
+  store/                    SQLite: streamers + login sessions + moderator links (+ tests)
   oauth/                    Twitch "Log in with Twitch" OAuth client (+ tests)
-  auth/                     login flow, cookie sessions, RequireStreamer middleware
+  auth/                     login flow, cookie sessions, owner/moderator roles, RequireStreamer/RequireOwner
   tenant/                   per-streamer registry (queue+session), token/key indexes (+ tests)
   queue/                    queue Manager, state machine, YouTube URL parsing (+ tests)
   session/                  streamer-controlled submission sessions (+ tests)
   hub/                      room-scoped WebSocket fan-out (+ tests)
-  server/                   HTTP handlers (login, admin, player, submit, ws)
+  server/                   HTTP handlers (login, admin, moderators, player, submit, ws)
   twitch/                   chat bot — kept for a future per-streamer re-wire (deferred)
 web/
-  templates/                login / admin / player / submit pages (embedded)
+  templates/                login / admin / player / submit / mod_claim pages (embedded)
   static/                   CSS + vanilla JS (embedded)
 media/                      uploaded files (gitignored)
 data/                       SQLite database (gitignored)

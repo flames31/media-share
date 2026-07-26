@@ -3,7 +3,6 @@
   var stage = document.getElementById("stage");
   var idle = document.getElementById("idle");
   var overlay = document.getElementById("overlay");
-  var ovTitle = document.getElementById("ovTitle");
   var ovBy = document.getElementById("ovBy");
 
   var ytReady = false;   // YouTube IFrame API loaded
@@ -49,6 +48,7 @@
       current = null;
       clearTimer();
       teardown();
+      showStage(false);
       showIdle(true);
       return;
     }
@@ -66,6 +66,7 @@
     current = it;
     clearTimer();
     showIdle(false);
+    showStage(true);
     setOverlay(it);
 
     if (it.type === "youtube") {
@@ -87,12 +88,15 @@
         width: "100%",
         height: "100%",
         videoId: it.youtubeId,
-        playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, start: it.startSeconds || 0, playsinline: 1 },
+        playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, start: it.startSeconds || 0, playsinline: 1, cc_load_policy: 0 },
         events: {
-          onReady: function (e) { e.target.playVideo(); startDurationTimer(it); },
+          onReady: function (e) { disableCaptions(e.target); e.target.playVideo(); startDurationTimer(it); },
           onStateChange: function (e) {
             if (e.data === YT.PlayerState.ENDED) reportEnded(it.id);
-            if (e.data === YT.PlayerState.PLAYING && paused) e.target.pauseVideo();
+            if (e.data === YT.PlayerState.PLAYING) {
+              disableCaptions(e.target); // captions can re-load per video; keep them off
+              if (paused) e.target.pauseVideo();
+            }
           },
         },
       });
@@ -123,10 +127,25 @@
     if (v) v.remove();
   }
 
+  // Force YouTube captions off (the API has no "off" playerVar; unloading the
+  // captions module is the reliable way).
+  function disableCaptions(p) {
+    try { p.setOption("captions", "track", {}); } catch (e) {}
+    try { p.unloadModule("captions"); } catch (e) {}
+    try { p.unloadModule("cc"); } catch (e) {}
+  }
+
   function teardown() {
-    removeUploadEl();
+    overlay.classList.remove("is-visible");
     if (ytPlayer) { try { ytPlayer.stopVideo(); } catch (e) {} }
-    overlay.classList.add("hidden");
+    // Let the stage fade out under the idle screen before we drop the media, so
+    // there's no abrupt cut to a YouTube end screen. Remove this exact node
+    // later (a quickly-starting next clip creates its own element).
+    var v = document.getElementById("uploadVideo");
+    if (v) {
+      try { v.pause(); } catch (e) {}
+      setTimeout(function () { v.remove(); }, 450);
+    }
   }
 
   // --- Duration timer (pause-aware) ---
@@ -192,12 +211,15 @@
     // The server will broadcast a new state; UI updates from applyState.
   }
 
-  // --- UI helpers ---
-  function showIdle(show) { idle.classList.toggle("hidden", !show); }
+  // --- UI helpers (opacity-based for smooth crossfades) ---
+  function showIdle(show) { idle.classList.toggle("is-visible", show); }
+  function showStage(show) { stage.classList.toggle("is-visible", show); }
   function setOverlay(it) {
-    ovTitle.textContent = it.title || "";
-    ovBy.textContent = it.submitterName ? "· by " + it.submitterName : "";
-    overlay.classList.remove("hidden");
+    // Show only who submitted the clip — never the internal title (e.g. the
+    // YouTube id). If no name was given, show nothing.
+    var name = (it.submitterName || "").trim();
+    ovBy.textContent = name ? "by " + name : "";
+    overlay.classList.toggle("is-visible", !!name);
     overlay.classList.toggle("paused", paused);
   }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"media-share/internal/auth"
+	"media-share/internal/store"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -47,7 +48,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if _, err := s.auth.Authenticate(r); err == nil {
+	if _, _, err := s.auth.Authenticate(r); err == nil {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
@@ -64,9 +65,13 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 	st, _ := auth.StreamerFrom(r.Context())
+	isOwner := auth.RoleFrom(r.Context()) == store.RoleOwner
 	s.render(w, "admin", map[string]any{
-		"DisplayName": st.DisplayName,
-		"PlayerURL":   s.cfg.BaseURL() + "/p/" + st.PlayerKey,
+		// For an owner this is their own name; for a moderator it's the owner
+		// whose console they're running, so they know whose channel it is.
+		"HeaderName": st.DisplayName,
+		"IsOwner":    isOwner,
+		"PlayerURL":  s.cfg.BaseURL() + "/p/" + st.PlayerKey,
 	})
 }
 
@@ -104,12 +109,14 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.tenant(r).Queue.Snapshot())
 }
 
-// handleMe returns the logged-in streamer's identity + player URL for the admin UI.
+// handleMe returns the logged-in caller's identity, role, and (for owners) the
+// player URL for the admin UI.
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	st, _ := auth.StreamerFrom(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"login":       st.Login,
 		"displayName": st.DisplayName,
+		"role":        auth.RoleFrom(r.Context()),
 		"playerUrl":   s.cfg.BaseURL() + "/p/" + st.PlayerKey,
 	})
 }

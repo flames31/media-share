@@ -12,13 +12,18 @@
     <span class="badge" id="connBadge">connecting…</span>
     <span class="spacer"></span>
     <nav>
-      <span class="badge">👤 {{.DisplayName}}</span>
-      <a href="#" id="openPlayer">Player</a>
+      {{if .IsOwner}}
+      <span class="badge">👤 {{.HeaderName}}</span>
+      {{else}}
+      <span class="badge">🛡 Moderating {{.HeaderName}}</span>
+      {{end}}
+      <a href="{{.PlayerURL}}" target="_blank" rel="noopener">Player</a>
       <a href="#" id="logout">Sign out</a>
     </nav>
   </header>
 
   <div class="wrap" id="console">
+    {{if .IsOwner}}
     <div class="card">
       <h2>Your player (add to OBS)</h2>
       <label for="playerLink">Browser-source URL</label>
@@ -28,6 +33,28 @@
       </div>
       <div class="hint">Add this as a Browser source in OBS. It plays your approved queue.</div>
     </div>
+
+    <div class="card" id="moderatorsCard">
+      <h2>Moderators</h2>
+      <p class="hint">Share this link with people you trust to run the console for you — approve/reject, skip, and open or close the media share. They don't need an account. Revoke anytime.</p>
+      <!-- no link yet -->
+      <div id="modNone">
+        <button class="btn primary" id="modCreateBtn">➕ Generate moderator link</button>
+      </div>
+      <!-- link active -->
+      <div id="modActive" class="hidden">
+        <label for="modLink">Moderator invite link</label>
+        <div class="row" style="align-items:stretch">
+          <input type="text" id="modLink" readonly style="flex:3">
+          <button class="btn" id="modCopyBtn" style="flex:none">📋 Copy</button>
+        </div>
+        <div class="controls" style="margin-top:14px">
+          <button class="btn ghost" id="modRegenBtn">🔄 Regenerate link</button>
+          <button class="btn red" id="modRevokeBtn">⛔ Revoke access</button>
+        </div>
+      </div>
+    </div>
+    {{end}}
 
     <div class="card" id="sessionCard">
       <h2>Media share session</h2>
@@ -62,7 +89,11 @@
         <button class="btn amber" id="btnClearQueue">🧹 Clear queue</button>
         <button class="btn red" id="btnClearAll">🗑 Clear all</button>
         <span class="spacer"></span>
-        <label class="toggle"><input type="checkbox" id="bypass"> Bypass verification</label>
+        <label class="switch">
+          <input type="checkbox" id="bypass">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+          <span class="switch-label">Auto approve</span>
+        </label>
       </div>
     </div>
 

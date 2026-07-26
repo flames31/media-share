@@ -50,6 +50,38 @@ Request with Cookie: sid=…
   request context; handlers read it with `auth.StreamerFrom(ctx)` and get their
   tenant via `server.tenant(r)` → `reg.Get(streamer.ID)`.
 
+## 2b. Moderator claim (delegating the console)
+
+Lets the streamer hand the admin console to a trusted moderator who has **no
+account**. The key trick: the moderator's login session stores the **owner's**
+`streamer_id` with `role='moderator'`, so it resolves to the owner's tenant
+everywhere with no special-casing.
+
+```
+Owner console            server                         store
+   │ POST /api/admin/moderators/link (RequireOwner)      │
+   │───────────────────────► handleModeratorsLink ──────►│ RegenerateModeratorLink → token
+   │◄──── {link: host/mod/<token>} ─────────────────────┤
+   │  (share the link)
+
+Moderator browser        server (handlers_auth)         store            auth
+   │ GET /mod/<token> ─────► handleModClaimPage: ResolveModeratorLink → render landing (no side effects)
+   │ click "Enter as moderator"
+   │ POST /mod/<token> ────► handleModClaim: ResolveModeratorLink → ownerID
+   │                         auth.LoginModerator(ownerID) ─────────────► CreateAuthSession(ownerID,'moderator')
+   │◄──── Set-Cookie sid=…; 303 /admin ─────────────────
+   │  ... now uses /admin exactly like the owner, minus owner-only cards ...
+```
+
+- **Claim is a POST** from a side-effect-free GET landing page, so link
+  prefetching can't silently mint a moderator session.
+- `RequireStreamer` admits the moderator to all `/api/admin/*` **except** the
+  `moderators/*` management endpoints, which are `RequireOwner` (→ 403 for a mod).
+- **Revoke/regenerate** (`POST /api/admin/moderators/revoke` /`.../link`) →
+  `RevokeModeratorAccess` deletes the link; revoke also deletes existing
+  `role='moderator'` sessions, so current moderators are signed out at once and
+  the old `/mod/<token>` 404s.
+
 ## 3. Opening a media-share session (streamer)
 
 ```

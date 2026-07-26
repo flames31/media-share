@@ -101,6 +101,9 @@ input[type=file] { color: var(--muted); font-size: 14px; }
 .btn.red { background: var(--red); border-color: var(--red); }
 .btn.amber { background: var(--amber); border-color: var(--amber); color: #2a1c00; }
 .btn.ghost { background: transparent; }
+/* Armed state for the inline two-step confirm (Clear queue/all, Stop session, etc.). */
+.btn.confirming { background: var(--amber); border-color: var(--amber); color: #2a1c00; animation: confirm-pulse 1s ease-in-out infinite; }
+@keyframes confirm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .72; } }
 
 .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .segmented button {
@@ -147,20 +150,69 @@ input[type=file] { color: var(--muted); font-size: 14px; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); cursor: pointer; user-select: none; }
 .toggle input { width: auto; }
 
+/* switch (styled checkbox toggle) */
+.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+.switch > input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; }
+.switch-track {
+  position: relative; flex: none;
+  width: 40px; height: 22px; border-radius: 999px;
+  background: #3a3d49; border: 1px solid var(--border);
+  transition: background .18s ease, border-color .18s ease;
+}
+.switch-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #e8e9ee; box-shadow: 0 1px 2px rgba(0,0,0,.4);
+  transition: transform .18s ease;
+}
+.switch-label { font-size: 14px; color: var(--muted); transition: color .18s ease; }
+.switch > input:checked + .switch-track { background: var(--green); border-color: var(--green); }
+.switch > input:checked + .switch-track .switch-thumb { transform: translateX(18px); }
+.switch > input:checked ~ .switch-label { color: var(--text); }
+.switch > input:focus-visible + .switch-track { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
 /* player page */
 body.player-body { background: #000; }
-.player-stage { position: fixed; inset: 0; background: #000; }
+.player-stage {
+  position: fixed; inset: 0; background: #000;
+  /* visibility flips to hidden AFTER the fade so a stopped-but-present iframe
+     can't be clicked (or seen) once we're idle. */
+  opacity: 0; visibility: hidden;
+  transition: opacity .45s ease, visibility 0s linear .45s;
+}
+.player-stage.is-visible {
+  opacity: 1; visibility: visible;
+  transition: opacity .45s ease, visibility 0s;
+}
 .player-stage iframe, .player-stage video { width: 100%; height: 100%; border: 0; background: #000; }
+
+/* Idle "waiting" screen — opaque and, when shown, it captures clicks so they
+   never reach a hidden clip behind it. */
 .player-idle {
-  position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  color: var(--muted); gap: 10px; text-align: center;
+  position: fixed; inset: 0; z-index: 2; background: #000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: var(--muted); gap: 12px; text-align: center;
+  opacity: 0; visibility: hidden;
+  transition: opacity .5s ease, visibility 0s linear .5s;
 }
-.player-idle .big { font-size: 22px; color: var(--text); }
+.player-idle.is-visible {
+  opacity: 1; visibility: visible;
+  transition: opacity .5s ease, visibility 0s;
+}
+.player-idle .big { font-size: 26px; color: var(--text); }
+.player-idle .dots::after {
+  content: ""; animation: idle-dots 1.4s steps(4, end) infinite;
+}
+@keyframes idle-dots { 0% { content: ""; } 25% { content: "·"; } 50% { content: "··"; } 75% { content: "···"; } }
+
 .player-overlay {
-  position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 20px;
-  background: linear-gradient(transparent, rgba(0,0,0,.75));
-  display: flex; gap: 12px; align-items: baseline;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; padding: 20px 24px;
+  background: linear-gradient(transparent, rgba(0,0,0,.8));
+  display: flex; gap: 14px; align-items: baseline;
+  pointer-events: none; /* purely informational — never intercept clicks */
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .4s ease, transform .4s ease;
 }
-.player-overlay .t { font-weight: 700; }
-.player-overlay .by { color: var(--muted); font-size: 14px; }
-.player-overlay.paused::after { content: "⏸ PAUSED"; color: var(--amber); font-weight: 800; margin-left: auto; }
+.player-overlay.is-visible { opacity: 1; transform: none; }
+.player-overlay .by { font-size: 24px; font-weight: 800; color: #fff; letter-spacing: .01em; }
+.player-overlay.paused::after { content: "⏸ PAUSED"; color: var(--amber); font-weight: 800; font-size: 18px; margin-left: auto; align-self: center; }

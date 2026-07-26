@@ -9,6 +9,12 @@ All routes are registered in `internal/server/server.go` (`routes()`), using Go
   same-origin guard.
 - **token** — requires a valid, currently-open invite token.
 - **key** — requires a valid `player_key`.
+- **mod-link** — requires a valid (unrevoked) moderator link token.
+
+Cookie sessions carry a **role** (`owner` or `moderator`). `RequireStreamer`
+accepts both; `RequireOwner` accepts only owners. A moderator's session
+`streamer_id` is the tenant *owner*, so it resolves to the owner's tenant
+throughout.
 
 ## Pages (HTML)
 
@@ -20,6 +26,7 @@ All routes are registered in `internal/server/server.go` (`routes()`), using Go
 | GET | `/submit` | public | `handleSubmitPage` | Fallback submit page; token from `?s=`. |
 | GET | `/s/{token}` | public | `handleSubmitPage` | Invite link. Token injected as `SessionToken`. |
 | GET | `/p/{key}` | key | `handlePlayerPage` | OBS player. 404 on unknown key. Injects `PlayerKey`, `StreamerName`. |
+| GET | `/mod/{token}` | mod-link | `handleModClaimPage` | Moderator-invite landing page (side-effect-free). 404 on unknown/revoked token. Injects `StreamerName`, `Token`. |
 
 ## Auth
 
@@ -27,7 +34,8 @@ All routes are registered in `internal/server/server.go` (`routes()`), using Go
 | --- | --- | --- | --- | --- |
 | GET | `/auth/twitch/start` | public | `handleAuthStart` | 302 to Twitch consent (mints single-use state). |
 | GET | `/auth/twitch/callback` | public | `handleAuthCallback` | `?code&state` → login → set cookie → 303 `/admin`. Errors → `/login?error=`. |
-| POST | `/auth/dev/login` | public\* | `handleDevLogin` | \*404 unless `DEV_LOGIN=1`. Logs in as fixed `dev` account. |
+| POST | `/auth/dev/login` | public\* | `handleDevLogin` | \*404 unless `DEV_LOGIN=1`. Logs in as fixed `dev` account (role `owner`). |
+| POST | `/mod/{token}` | mod-link | `handleModClaim` | Exchanges a valid moderator link for a moderator session scoped to the link owner's tenant → 303 `/admin`. 404 if revoked. |
 | POST | `/logout` | cookie | `handleLogout` | Deletes the session row + clears cookie. |
 
 ## Public API (tenant resolved from token / key)
@@ -40,6 +48,11 @@ All routes are registered in `internal/server/server.go` (`routes()`), using Go
 | GET | `/ws` | cookie or key | `handleWS` | `?role=admin` (cookie→room) or `?role=player&key=` (key→room). Upgrades to WebSocket. |
 
 ## Admin API (cookie-gated; acts on the authenticated streamer's tenant)
+
+Open to **both** the owner and their moderators (`RequireStreamer`), except the
+**Moderator management** rows below, which are owner-only (`RequireOwner` → 403 for
+a moderator). For a moderator session the tenant is the *owner's* (the session's
+`streamer_id` is the owner), so these all operate on the same tenant.
 
 | Method | Path | Handler | Body | Effect |
 | --- | --- | --- | --- | --- |
@@ -57,6 +70,9 @@ All routes are registered in `internal/server/server.go` (`routes()`), using Go
 | POST | `/api/admin/session/start` | `handleSessionStart` | — | Open session, mint token → `adminSessionView`. |
 | POST | `/api/admin/session/stop` | `handleSessionStop` | — | Close session, drop token → `adminSessionView`. |
 | POST | `/api/admin/session/regenerate` | `handleSessionRegenerate` | — | New token, old links die → `adminSessionView`. |
+| GET | `/api/admin/moderators` **(owner-only)** | `handleModeratorsStatus` | — | `{link}` — current moderator link, empty if none. |
+| POST | `/api/admin/moderators/link` **(owner-only)** | `handleModeratorsLink` | — | Mint/regenerate the moderator link (old link dies) → `{link}`. |
+| POST | `/api/admin/moderators/revoke` **(owner-only)** | `handleModeratorsRevoke` | — | Delete the link **and** sign out all current moderators → `{ok:true}`. |
 
 > Item actions take `{id}` (shared `idBody`); toggles take their own small body
 > (e.g. `{all}`, `{enabled}`). Bodies are decoded strictly

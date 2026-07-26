@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Moderate · Media Share</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <h1>🛡 Media Share</h1>
+    <span class="badge">moderator invite</span>
+  </header>
+
+  <div class="wrap" style="max-width:520px">
+    <div class="card" style="text-align:center">
+      <h2 style="justify-content:center">Moderate {{.StreamerName}}'s media share</h2>
+      <p class="hint">You've been invited to help run the console — approve or reject
+        submissions, skip and pause, and open or close the media share. No account
+        needed. The streamer can revoke this access at any time.</p>
+      <form method="POST" action="/mod/{{.Token}}" style="margin-top:12px">
+        <button class="btn primary" type="submit">🛡 Enter as moderator</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

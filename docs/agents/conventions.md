@@ -16,6 +16,19 @@ tenant from client input.
 - If you find yourself passing a streamer id or room in a request body/query,
   stop — that's the bug.
 
+### 1b. A session's `streamer_id` is the tenant owner; `role` is the caller
+Moderators have no account. Their login session stores the **owner's**
+`streamer_id` with `role="moderator"`, so `server.tenant(r)` and WS rooms resolve
+to the owner's tenant unchanged. Consequences to respect:
+- Gate owner-only endpoints with `auth.RequireOwner` (not `RequireStreamer`) —
+  currently just the `moderators/*` link-management routes. Everything else is
+  fine for both roles.
+- Never derive the tenant from the *role* or from anything client-supplied; it's
+  always `StreamerFrom(ctx).ID`.
+- **Revoke must actually kick:** `RevokeModeratorAccess` deletes the link **and**
+  the `role='moderator'` sessions. If you add another way to grant mod access,
+  make revoke cover it too.
+
 ### 2. Session control goes through the `Tenant`, not the `Manager`
 Use `Tenant.StartSession() / RegenerateSession() / StopSession()`. These call the
 underlying `session.Manager` **and** update the registry's `byToken` index via

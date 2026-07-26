@@ -31,13 +31,19 @@ streamer id  ─is the key for─►  Tenant {Queue, Session}  ─and is also─
      └── never from client input                              (no other tenant sees them)
 ```
 
-Three actors, three credentials, all resolved to a streamer id server-side:
+Actors and credentials, all resolved to a streamer id server-side:
 
 | Actor | Credential | Where it's checked |
 | --- | --- | --- |
-| Streamer (admin) | `sid` cookie | `auth.Authenticate` / `RequireStreamer` |
+| Streamer (owner) | `sid` cookie (`role=owner`) | `auth.Authenticate` / `RequireStreamer` / `RequireOwner` |
+| Moderator | `sid` cookie (`role=moderator`, `streamer_id`=owner) | `auth.Authenticate`; claimed via `/mod/<token>` → `store.ResolveModeratorLink` |
 | Player (OBS) | `player_key` in URL | `store.GetStreamerByPlayerKey` |
 | Viewer (submitter) | invite `token` | `reg.ResolveSession` |
+
+A **moderator** is a delegated helper with no account: their login session stores
+the *owner's* `streamer_id` plus `role=moderator`, so they resolve to the owner's
+tenant through the same path as the owner. `role` only gates owner-only endpoints
+(`RequireOwner`, e.g. managing moderator links) and small UI differences.
 
 ## The invariants you must not break
 

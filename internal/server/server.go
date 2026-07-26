@@ -30,7 +30,7 @@ type Server struct {
 // parse, since that is a programming error, not a runtime condition.
 func New(cfg *config.Config, st *store.Store, reg *tenant.Registry, a *auth.Authenticator, h *hub.Hub) *Server {
 	s := &Server{cfg: cfg, store: st, reg: reg, auth: a, hub: h, tmpl: map[string]*template.Template{}}
-	for _, name := range []string{"submit", "player", "admin", "login"} {
+	for _, name := range []string{"submit", "player", "admin", "login", "mod_claim"} {
 		t, err := template.ParseFS(web.TemplatesFS, "templates/"+name+".html")
 		if err != nil {
 			log.Fatalf("parse template %s: %v", name, err)
@@ -54,11 +54,13 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /submit", s.handleSubmitPage)
 	mux.HandleFunc("GET /s/{token}", s.handleSubmitPage)
 	mux.HandleFunc("GET /p/{key}", s.handlePlayerPage)
+	mux.HandleFunc("GET /mod/{token}", s.handleModClaimPage)
 
 	// Auth (Log in with Twitch)
 	mux.HandleFunc("GET /auth/twitch/start", s.handleAuthStart)
 	mux.HandleFunc("GET /auth/twitch/callback", s.handleAuthCallback)
 	mux.HandleFunc("POST /auth/dev/login", s.handleDevLogin)
+	mux.HandleFunc("POST /mod/{token}", s.handleModClaim)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 
 	// Public API (tenant resolved from an invite token or player key)
@@ -85,6 +87,11 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/admin/session/stop", s.auth.RequireStreamer(s.handleSessionStop))
 	mux.HandleFunc("POST /api/admin/session/regenerate", s.auth.RequireStreamer(s.handleSessionRegenerate))
 
+	// Moderator link management (owner-only — a moderator cannot mint or revoke access)
+	mux.HandleFunc("GET /api/admin/moderators", s.auth.RequireOwner(s.handleModeratorsStatus))
+	mux.HandleFunc("POST /api/admin/moderators/link", s.auth.RequireOwner(s.handleModeratorsLink))
+	mux.HandleFunc("POST /api/admin/moderators/revoke", s.auth.RequireOwner(s.handleModeratorsRevoke))
+
 	// Static assets (embedded) and uploaded media (on disk).
 	mux.Handle("GET /static/", http.FileServerFS(web.StaticFS))
 	mux.Handle("GET /media/", http.StripPrefix("/media/", http.FileServer(http.Dir(s.cfg.MediaDir))))
@@ -102,12 +109,13 @@ func (s *Server) tenant(r *http.Request) *tenant.Tenant {
 // requireStreamerPage gates a page on login, redirecting to /login when absent.
 func (s *Server) requireStreamerPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		st, err := s.auth.Authenticate(r)
+		st, role, err := s.auth.Authenticate(r)
 		if err != nil {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		next(w, r.WithContext(auth.WithStreamer(r.Context(), st)))
+		ctx := auth.WithRole(auth.WithStreamer(r.Context(), st), role)
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -117,7 +125,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	var room string
 	switch role {
 	case hub.RoleAdmin:
-		st, err := s.auth.Authenticate(r)
+		st, _, err := s.auth.Authenticate(r)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

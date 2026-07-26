@@ -1,8 +1,11 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
+
+	"media-share/internal/store"
 )
 
 // handleAuthStart redirects to Twitch's consent screen to begin login.
@@ -53,4 +56,45 @@ func (s *Server) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 
 func redirectLoginError(w http.ResponseWriter, r *http.Request, msg string) {
 	http.Redirect(w, r, "/login?error="+url.QueryEscape(msg), http.StatusSeeOther)
+}
+
+// handleModClaimPage shows a moderator-invite landing page. It is side-effect
+// free (GET): a moderator session is only created by the POST below, so a browser
+// prefetching the link can't silently claim access.
+func (s *Server) handleModClaimPage(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	ownerID, err := s.store.ResolveModeratorLink(token)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	owner, err := s.store.GetStreamer(ownerID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.render(w, "mod_claim", map[string]any{
+		"StreamerName": owner.DisplayName,
+		"Token":        token,
+	})
+}
+
+// handleModClaim exchanges a valid moderator link for a moderator login session
+// scoped to the link owner's tenant, then drops the moderator at the console.
+func (s *Server) handleModClaim(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	ownerID, err := s.store.ResolveModeratorLink(token)
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "This moderator link is no longer valid.", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := s.auth.LoginModerator(w, ownerID); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }

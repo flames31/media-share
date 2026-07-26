@@ -18,13 +18,26 @@
     });
   }
 
+  // Inline two-step confirm. Native confirm() is unreliable — it's blocked in
+  // embedded browsers (e.g. an OBS dock) and after "prevent additional dialogs",
+  // which silently swallowed these destructive actions. First click arms the
+  // button ("Click to confirm"); a second click within 3s runs fn.
+  function confirmClick(btn, fn) {
+    if (!btn) return;
+    var orig = btn.innerHTML, armed = false, timer = null;
+    function reset() { armed = false; btn.classList.remove("confirming"); btn.innerHTML = orig; if (timer) { clearTimeout(timer); timer = null; } }
+    btn.addEventListener("click", function () {
+      if (armed) { reset(); fn(); return; }
+      armed = true;
+      btn.classList.add("confirming");
+      btn.innerHTML = "⚠ Click to confirm";
+      timer = setTimeout(reset, 3000);
+    });
+  }
+
   document.getElementById("btnSkip").addEventListener("click", function () { action("skip"); });
-  document.getElementById("btnClearQueue").addEventListener("click", function () {
-    if (confirm("Clear the approved queue?")) action("clear", { scope: "queue" });
-  });
-  document.getElementById("btnClearAll").addEventListener("click", function () {
-    if (confirm("Clear EVERYTHING — pending, queue, and now playing?")) action("clear", { scope: "all" });
-  });
+  confirmClick(document.getElementById("btnClearQueue"), function () { action("clear", { scope: "queue" }); });
+  confirmClick(document.getElementById("btnClearAll"), function () { action("clear", { scope: "all" }); });
   document.getElementById("btnPause").addEventListener("click", function () {
     action(state && state.paused ? "resume" : "pause");
   });
@@ -36,13 +49,12 @@
     e.preventDefault();
     document.getElementById("logoutForm").submit();
   });
-  document.getElementById("openPlayer").addEventListener("click", function (e) {
-    e.preventDefault();
-    window.open(document.getElementById("playerLink").value, "_blank");
-  });
-  document.getElementById("playerCopyBtn").addEventListener("click", function () {
-    copyFrom("playerLink", "playerCopyBtn");
-  });
+  // The "Player" header link is a plain href (works for owners and moderators).
+  // The OBS browser-source card below is owner-only, so guard its copy button.
+  var playerCopyBtn = document.getElementById("playerCopyBtn");
+  if (playerCopyBtn) {
+    playerCopyBtn.addEventListener("click", function () { copyFrom("playerLink", "playerCopyBtn"); });
+  }
 
   // --- WebSocket (room resolved from the login cookie server-side) ---
   function connect() {
@@ -194,15 +206,54 @@
   }
 
   document.getElementById("sessionStartBtn").addEventListener("click", function () { sessionAction("start"); });
-  document.getElementById("sessionStopBtn").addEventListener("click", function () {
-    if (confirm("Stop media share? The current invite link will stop working.")) sessionAction("stop");
-  });
-  document.getElementById("sessionRegenBtn").addEventListener("click", function () {
-    if (confirm("Generate a new link? The old link will stop working immediately.")) sessionAction("regenerate");
-  });
+  confirmClick(document.getElementById("sessionStopBtn"), function () { sessionAction("stop"); });
+  confirmClick(document.getElementById("sessionRegenBtn"), function () { sessionAction("regenerate"); });
   document.getElementById("sessionCopyBtn").addEventListener("click", function () {
     copyFrom("sessionLink", "sessionCopyBtn");
   });
+
+  // --- Moderators (owner-only; the card is absent for moderators) ---
+  var moderatorsCard = document.getElementById("moderatorsCard");
+
+  function renderModerators(link) {
+    var none = document.getElementById("modNone");
+    var active = document.getElementById("modActive");
+    if (link) {
+      document.getElementById("modLink").value = link;
+      none.classList.add("hidden");
+      active.classList.remove("hidden");
+    } else {
+      active.classList.add("hidden");
+      none.classList.remove("hidden");
+    }
+  }
+
+  function loadModerators() {
+    fetch("/api/admin/moderators")
+      .then(function (r) { if (r.status === 401) { onUnauthorized(); return null; } return r.ok ? r.json() : null; })
+      .then(function (v) { if (v) renderModerators(v.link); })
+      .catch(function () {});
+  }
+
+  function modAction(path) {
+    return action("moderators/" + path)
+      .then(function (r) { return r && r.ok ? r.json() : null; });
+  }
+
+  if (moderatorsCard) {
+    document.getElementById("modCreateBtn").addEventListener("click", function () {
+      modAction("link").then(function (v) { if (v) renderModerators(v.link); });
+    });
+    confirmClick(document.getElementById("modRegenBtn"), function () {
+      modAction("link").then(function (v) { if (v) renderModerators(v.link); });
+    });
+    confirmClick(document.getElementById("modRevokeBtn"), function () {
+      modAction("revoke").then(function () { renderModerators(""); });
+    });
+    document.getElementById("modCopyBtn").addEventListener("click", function () {
+      copyFrom("modLink", "modCopyBtn");
+    });
+  }
 
   // --- utils ---
   function copyFrom(inputId, btnId) {
@@ -233,4 +284,5 @@
   // --- boot ---
   connect();
   loadSession();
+  if (moderatorsCard) loadModerators();
 })();

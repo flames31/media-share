@@ -14,7 +14,8 @@ Repo-relative paths. Line counts are rough; treat them as "how big is this."
 | --- | --- |
 | `server.go` | `Server` struct, `New` (parses templates), **`routes()` = the full route table**, `tenant(r)` (authed streamer → tenant), `requireStreamerPage`, `handleWS` (secure room resolution). |
 | `render.go` | `writeJSON`/`writeErr`, `render` (buffered template exec), page handlers: `handleIndex`, `handleLoginPage`, `handleAdminPage`, `handleSubmitPage`, `handlePlayerPage`, plus `handleState`, `handleMe`. |
-| `handlers_auth.go` | `handleAuthStart`, `handleAuthCallback`, `handleDevLogin`, `handleLogout`, `redirectLoginError`. |
+| `handlers_auth.go` | `handleAuthStart`, `handleAuthCallback`, `handleDevLogin`, `handleLogout`, `redirectLoginError`, and the moderator-claim handlers `handleModClaimPage` (GET landing) / `handleModClaim` (POST → moderator session). |
+| `handlers_moderators.go` | Owner-only moderator-link endpoints: `handleModeratorsStatus`/`Link`/`Revoke`, plus `moderatorLink(token)` and `ownerID(r)` helpers. |
 | `handlers_admin.go` | Queue moderation endpoints: approve/reject/remove/skip/pause/resume/clear/bypass. Shared `decode` (strict, `DisallowUnknownFields`) + `idBody`/`writeOK` helpers; each calls `s.tenant(r).Queue.*`. |
 | `handlers_session.go` | `sessionLink`, `adminSessionView`, `handleSessionCheck` (public), and session status/start/stop/regenerate. |
 | `handlers_submit.go` | `handleSubmit` (+ `submitYouTube`, `submitUpload`) and parsing helpers (`parseStart`, `clampDuration`, `origTitle`). The token gate lives here. |
@@ -37,9 +38,9 @@ Repo-relative paths. Line counts are rough; treat them as "how big is this."
 
 | File | What's in it |
 | --- | --- |
-| `internal/auth/auth.go` | `Authenticator`: `AuthorizeURL`, `Login`, `DevLogin`, `Logout`, `Authenticate`, `RequireStreamer`, cookie helpers, OAuth `state` store, `sameSite` CSRF guard, `WithStreamer`/`StreamerFrom`. |
+| `internal/auth/auth.go` | `Authenticator`: `AuthorizeURL`, `Login`, `LoginModerator`, `DevLogin`, `Logout`, `Authenticate`→`(streamer,role,err)`, `RequireStreamer` (owner+mod) / `RequireOwner` (owner-only), cookie helpers, OAuth `state` store, `sameSite` CSRF guard, `WithStreamer`/`StreamerFrom`, `WithRole`/`RoleFrom`. |
 | `internal/oauth/oauth.go` | Twitch Authorization-Code client: `AuthorizeURL`, `ExchangeCodeForUser`, `getUser` (Helix). Endpoints are package vars for test stubbing. |
-| `internal/store/store.go` | SQLite: `Open`/`migrate`, `Streamer`, `UpsertStreamer`, `GetStreamer`, `GetStreamerByPlayerKey`, `CreateAuthSession`, `GetValidAuthSession`, `DeleteAuthSession`. |
+| `internal/store/store.go` | SQLite: `Open`/`migrate`, `Streamer`, `UpsertStreamer`, `GetStreamer`, `GetStreamerByPlayerKey`, `CreateAuthSession(role)`, `GetValidAuthSession`→`(streamer,role,err)`, `DeleteAuthSession`, moderator links (`ModeratorLink`/`RegenerateModeratorLink`/`ResolveModeratorLink`/`RevokeModeratorAccess`), and `RoleOwner`/`RoleModerator`. |
 
 ## Config
 
@@ -56,6 +57,7 @@ Repo-relative paths. Line counts are rough; treat them as "how big is this."
 | `web/templates/admin.html` + `web/static/admin.js` | Console: cookie auth, session card, player-URL card, pending/queue/now-playing, controls. WS `role=admin`. |
 | `web/templates/player.html` + `web/static/player.js` | OBS player: injects `__PLAYER_KEY__`; WS `role=player&key=`; posts `/api/player/ended`. |
 | `web/templates/submit.html` + `web/static/submit.js` | Viewer submission form; uses the injected invite token. |
+| `web/templates/mod_claim.html` | Moderator-invite landing page ("Enter as moderator" → POST `/mod/{token}`). |
 | `web/static/app.css` | Shared styles. |
 | `web/templates/twitch_callback.html` | Legacy/aux callback template. |
 

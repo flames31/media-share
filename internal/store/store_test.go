@@ -69,20 +69,23 @@ func TestAuthSessionLifecycle(t *testing.T) {
 	s := newTestStore(t)
 	s.UpsertStreamer("7", "amy", "Amy")
 
-	sid, err := s.CreateAuthSession("7", time.Hour)
+	sid, err := s.CreateAuthSession("7", RoleOwner, time.Hour)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	st, err := s.GetValidAuthSession(sid)
+	st, role, err := s.GetValidAuthSession(sid)
 	if err != nil || st.ID != "7" {
 		t.Fatalf("valid session = %v, %v", st, err)
 	}
+	if role != RoleOwner {
+		t.Errorf("role = %q, want %q", role, RoleOwner)
+	}
 
 	// Empty / unknown ids are not valid.
-	if _, err := s.GetValidAuthSession(""); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.GetValidAuthSession(""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("empty sid err = %v", err)
 	}
-	if _, err := s.GetValidAuthSession("bogus"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.GetValidAuthSession("bogus"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("bogus sid err = %v", err)
 	}
 
@@ -90,7 +93,7 @@ func TestAuthSessionLifecycle(t *testing.T) {
 	if err := s.DeleteAuthSession(sid); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := s.GetValidAuthSession(sid); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.GetValidAuthSession(sid); !errors.Is(err, ErrNotFound) {
 		t.Errorf("after delete err = %v, want ErrNotFound", err)
 	}
 }
@@ -99,8 +102,91 @@ func TestExpiredAuthSessionRejected(t *testing.T) {
 	s := newTestStore(t)
 	s.UpsertStreamer("9", "zoe", "Zoe")
 
-	sid, _ := s.CreateAuthSession("9", -time.Minute) // already expired
-	if _, err := s.GetValidAuthSession(sid); !errors.Is(err, ErrNotFound) {
+	sid, _ := s.CreateAuthSession("9", RoleOwner, -time.Minute) // already expired
+	if _, _, err := s.GetValidAuthSession(sid); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expired session err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestModeratorSessionRoleRoundTrips(t *testing.T) {
+	s := newTestStore(t)
+	s.UpsertStreamer("owner1", "owen", "Owen")
+
+	// A moderator session is bound to the OWNER's id, with role=moderator.
+	sid, err := s.CreateAuthSession("owner1", RoleModerator, time.Hour)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	st, role, err := s.GetValidAuthSession(sid)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if st.ID != "owner1" {
+		t.Errorf("streamer = %q, want owner1 (the tenant owner)", st.ID)
+	}
+	if role != RoleModerator {
+		t.Errorf("role = %q, want %q", role, RoleModerator)
+	}
+}
+
+func TestModeratorLinkLifecycle(t *testing.T) {
+	s := newTestStore(t)
+	s.UpsertStreamer("owner1", "owen", "Owen")
+
+	// No link yet.
+	if _, err := s.ModeratorLink("owner1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("initial link err = %v, want ErrNotFound", err)
+	}
+
+	tok, err := s.RegenerateModeratorLink("owner1")
+	if err != nil || tok == "" {
+		t.Fatalf("regenerate: %q, %v", tok, err)
+	}
+	if got, err := s.ModeratorLink("owner1"); err != nil || got != tok {
+		t.Fatalf("ModeratorLink = %q, %v; want %q", got, err, tok)
+	}
+	if owner, err := s.ResolveModeratorLink(tok); err != nil || owner != "owner1" {
+		t.Fatalf("ResolveModeratorLink = %q, %v; want owner1", owner, err)
+	}
+
+	// Regenerate replaces the old token (one active link per streamer).
+	tok2, err := s.RegenerateModeratorLink("owner1")
+	if err != nil {
+		t.Fatalf("regenerate 2: %v", err)
+	}
+	if tok2 == tok {
+		t.Error("regenerate should mint a different token")
+	}
+	if _, err := s.ResolveModeratorLink(tok); !errors.Is(err, ErrNotFound) {
+		t.Errorf("old token still resolves after regenerate: %v", err)
+	}
+	if owner, err := s.ResolveModeratorLink(tok2); err != nil || owner != "owner1" {
+		t.Fatalf("new token resolve = %q, %v", owner, err)
+	}
+}
+
+func TestRevokeModeratorAccessKicksModsKeepsOwner(t *testing.T) {
+	s := newTestStore(t)
+	s.UpsertStreamer("owner1", "owen", "Owen")
+
+	tok, _ := s.RegenerateModeratorLink("owner1")
+	ownerSid, _ := s.CreateAuthSession("owner1", RoleOwner, time.Hour)
+	modSid, _ := s.CreateAuthSession("owner1", RoleModerator, time.Hour)
+
+	if err := s.RevokeModeratorAccess("owner1"); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	// Link gone.
+	if _, err := s.ResolveModeratorLink(tok); !errors.Is(err, ErrNotFound) {
+		t.Errorf("link still resolves after revoke: %v", err)
+	}
+	// Moderator session kicked.
+	if _, _, err := s.GetValidAuthSession(modSid); !errors.Is(err, ErrNotFound) {
+		t.Errorf("mod session survived revoke: %v", err)
+	}
+	// Owner session untouched.
+	if _, role, err := s.GetValidAuthSession(ownerSid); err != nil || role != RoleOwner {
+		t.Errorf("owner session = role %q, err %v; want owner, nil", role, err)
 	}
 }

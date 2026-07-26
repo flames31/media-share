@@ -18,12 +18,33 @@ CREATE TABLE streamers (
 
 CREATE TABLE auth_sessions (
     id          TEXT PRIMARY KEY,     -- opaque random 32-byte hex; this is the cookie value
-    streamer_id TEXT NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
+    streamer_id TEXT NOT NULL REFERENCES streamers(id) ON DELETE CASCADE, -- the TENANT OWNER
+    role        TEXT NOT NULL DEFAULT 'owner', -- 'owner' | 'moderator' (the caller's role)
     created_at  INTEGER NOT NULL,
     expires_at  INTEGER NOT NULL
 );
 CREATE INDEX idx_auth_sessions_streamer ON auth_sessions(streamer_id);
+
+-- One active moderator invite link per streamer. Unguessable capability token
+-- that resolves to the owner's streamer id. Persisted (mod access is account
+-- config, not ephemeral runtime state).
+CREATE TABLE moderator_links (
+    token       TEXT PRIMARY KEY,
+    streamer_id TEXT NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_moderator_links_streamer ON moderator_links(streamer_id);
 ```
+
+> **`auth_sessions.role` and moderators.** A session's `streamer_id` is always the
+> **tenant owner**. `role` distinguishes the owner from a delegated **moderator**
+> who is running that owner's console. A moderator has no account of their own —
+> claiming a moderator link just creates an `auth_sessions` row for the owner with
+> `role='moderator'`. Because tenant resolution keys off `streamer_id`, moderators
+> flow through the same tenant/WS path as the owner with no special-casing;
+> `role` only gates owner-only actions (managing moderator links) and tweaks the
+> admin UI. The `role` column is added by an **idempotent additive migration**
+> (`ALTER TABLE … ADD COLUMN`, "duplicate column" swallowed).
 
 Store methods (all parameterized):
 
@@ -31,10 +52,19 @@ Store methods (all parameterized):
   `player_key = randToken(16)`), else refresh login/display/last_login. Preserves
   `player_key`. Truncates `now` to whole seconds so in-memory values match reads.
 - `GetStreamer(id)`, `GetStreamerByPlayerKey(key)` — `ErrNotFound` when missing.
-- `CreateAuthSession(streamerID, ttl)` → session id (30-day TTL from `auth`).
-- `GetValidAuthSession(id)` — returns the streamer, or `ErrNotFound`; deletes the
-  row opportunistically when expired.
+- `CreateAuthSession(streamerID, role, ttl)` → session id (30-day TTL from `auth`).
+- `GetValidAuthSession(id)` → `(*Streamer, role, error)` — the streamer (tenant
+  owner) and caller's role, or `ErrNotFound`; deletes the row opportunistically
+  when expired.
 - `DeleteAuthSession(id)` — logout.
+- `ModeratorLink(streamerID)` → current mod link token or `ErrNotFound`.
+- `RegenerateModeratorLink(streamerID)` → mint a fresh token, replacing any
+  existing one (does not touch existing mod sessions).
+- `ResolveModeratorLink(token)` → owner streamer id, or `ErrNotFound`.
+- `RevokeModeratorAccess(streamerID)` → delete the link **and** all `role='moderator'`
+  sessions for that streamer (kick current mods; owner session untouched).
+
+Roles are `store.RoleOwner` / `store.RoleModerator`.
 
 **What is NOT persisted:** queue items, invite tokens, session active-state,
 now-playing, pause/bypass. All ephemeral (see below).
@@ -105,6 +135,7 @@ Public `Status{Active, StartedAt}` is safe to broadcast; `Token()` is admin-only
 | --- | --- | --- | --- | --- |
 | `sid` (login session) | `store.CreateAuthSession` (32B) | 30 days, server-checked | Browser cookie (HttpOnly) | Authenticate a streamer. |
 | `player_key` | `store.UpsertStreamer` (16B) | Permanent, per account | In `/p/<key>` URL | Stable OBS player address. |
+| moderator link `token` | `store.RegenerateModeratorLink` (24B) | Until regenerate/revoke (persisted) | Owner admin + `/mod/<token>` | Delegate the console to a moderator (no login). |
 | invite `token` | `session.newToken` (18B) | Until stop/regenerate/restart | Admin view + `/s/<token>` | Let anonymous viewers submit. |
 | OAuth `state` | `auth.AuthorizeURL` (24B) | 10 min, single-use | Twitch redirect round-trip | CSRF protection for login. |
 

@@ -101,9 +101,15 @@ for players) — never trusted from the client.**
 
 | Actor | How they're identified | Scope they get |
 | --- | --- | --- |
-| **Streamer (admin)** | `sid` cookie → `auth_sessions` row → streamer | Their own tenant. Room = their streamer id, taken from the cookie. |
+| **Streamer (owner)** | `sid` cookie → `auth_sessions` row (`role=owner`) → streamer | Their own tenant. Room = their streamer id, taken from the cookie. Plus owner-only actions (managing moderator links). |
+| **Moderator** | `sid` cookie → `auth_sessions` row (`role=moderator`, `streamer_id`=the owner) | The **owner's** tenant — full moderation + session control, but **not** owner-only actions. Claimed via a moderator link (`/mod/<token>`); no account of their own. |
 | **Player (OBS)** | `player_key` in the URL/WS query → streamer | Read-only view of one tenant. Room resolved from the key. |
 | **Viewer (submitter)** | Invite `token` in the form/path | Can submit to exactly one tenant while its session is open. |
+
+Because a session's `streamer_id` is always the **tenant owner**, a moderator
+resolves to the owner's tenant through the exact same path as the owner
+(`server.tenant(r)`, WS room). The `role` only gates owner-only endpoints
+(`auth.RequireOwner`) and small UI differences.
 
 The authoritative rules, enforced in code:
 
